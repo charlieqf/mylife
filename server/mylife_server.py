@@ -137,6 +137,30 @@ class TencentTTS:
         return base64.b64decode(audio)
 
 
+class TencentASR(TencentTTS):
+    """一句话识别 SentenceRecognition: <= 60 s, <= 3 MB per call. Same TC3 signer, different product."""
+    HOST = "asr.tencentcloudapi.com"
+    SERVICE = "asr"
+    VERSION = "2019-06-14"
+
+    def recognize(self, wav):
+        resp = self._call("SentenceRecognition", {
+            "EngSerViceType": "16k_zh", "SourceType": 1, "VoiceFormat": "wav",
+            "Data": base64.b64encode(wav).decode("ascii"), "DataLen": len(wav),
+            "FilterModal": 1,      # drop most filler words (嗯、啊) so the text reads like typing
+            "ConvertNumMode": 1,   # 三点 -> 3点 only where it reads naturally
+        }, timeout=30)
+        return (resp.get("Result") or "").strip(), int(resp.get("AudioDuration") or 0)
+
+
+def wav_seconds(wav):
+    """Duration of a 16-bit PCM WAV from its header; None if it is not one."""
+    if len(wav) < 44 or wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
+        return None
+    byte_rate = int.from_bytes(wav[28:32], "little")
+    return (len(wav) - 44) / float(byte_rate) if byte_rate else None
+
+
 # Tencent Speed parameter: documented anchor points (multiplier -> Speed).
 SPEED_ANCHORS = [(0.6, -2.0), (0.8, -1.0), (1.0, 0.0), (1.2, 1.0), (1.5, 2.0), (2.5, 6.0)]
 
@@ -213,6 +237,9 @@ STYLE_PATH = os.environ.get("MYLIFE_STYLE", os.path.join(HERE, "prompts", "de-ai
 OUTPUT_RULE = "只输出你要说的话本身：纯文本，不加引号，不加名字前缀，不写动作或旁白。"
 CHAT_PER_MIN = int(os.environ.get("MYLIFE_CHAT_PER_MIN", "20"))
 CHAT_DAILY = int(os.environ.get("MYLIFE_CHAT_DAILY", "3000"))
+ASR_PER_MIN = int(os.environ.get("MYLIFE_ASR_PER_MIN", "20"))
+ASR_DAILY = int(os.environ.get("MYLIFE_ASR_DAILY", "3000"))
+ASR_MAX_BYTES = 2_200_000  # 60 s of 16 kHz mono 16-bit is ~1.92 MB
 CHAT_LOG_DIR = os.path.join(CACHE_DIR, "chatlog")
 FICTION_HINT = re.compile(r"(我(的|那间|这间)?(书店|店里|店)|我(女儿|闺女|老婆|妻子|爱人)|我还债|我做外贸|我那几年|我年轻的时候)")
 # Same signals as the page's R.crisis plus a few softer ones; the page answers the explicit ones with a
@@ -332,12 +359,13 @@ class App:
         if not sid or not skey:
             sys.exit("TENCENT_SECRET_ID / TENCENT_SECRET_KEY missing from environment")
         self.tts = TencentTTS(sid, skey, os.environ.get("TENCENT_TTS_REGION", "ap-shanghai"))
+        self.asr = TencentASR(sid, skey, os.environ.get("TENCENT_TTS_REGION", "ap-shanghai"))
         with open(CATALOG_PATH, encoding="utf-8") as f:
             self.catalog = json.load(f)
         self.voices = {str(v["id"]): v for v in self.catalog["voices"]}
         self.pool = ThreadPoolExecutor(max_workers=6)
         self.lock = threading.Lock()
-        self.hits = {"tts": defaultdict(deque), "chat": defaultdict(deque)}
+        self.hits = {"tts": defaultdict(deque), "chat": defaultdict(deque), "asr": defaultdict(deque)}
         os.makedirs(CACHE_DIR, exist_ok=True)
         os.makedirs(CHAT_LOG_DIR, exist_ok=True)
         self.usage_path = os.path.join(CACHE_DIR, "usage.json")
@@ -350,7 +378,7 @@ class App:
     # -- limits
     def allow_ip(self, ip, kind="tts"):
         now = time.time()
-        limit = PER_IP_PER_MIN if kind == "tts" else CHAT_PER_MIN
+        limit = {"tts": PER_IP_PER_MIN, "chat": CHAT_PER_MIN, "asr": ASR_PER_MIN}[kind]
         with self.lock:
             q = self.hits[kind][ip]
             while q and now - q[0] > 60:
@@ -521,6 +549,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path in ("/api/chat", "/api/memo"):
             return self.handle_chat(path)
+        if path == "/api/asr":
+            return self.handle_asr()
         if path != "/api/tts":
             return self.send_json(404, {"error": "not found"})
         try:
@@ -574,6 +604,29 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("chat error %s\n" % e)
             return self.send_json(429 if str(e) == "DailyCap" else 502, {"error": str(e)[:120]})
         return self.send_json(200, {"reply": reply, "model": model, "ms": ms})
+
+    def handle_asr(self):
+        """Body: a 16 kHz mono 16-bit WAV recorded in the page. The audio is not stored."""
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 44 or n > ASR_MAX_BYTES:
+            return self.send_json(413, {"error": "bad audio size"})
+        wav = self.rfile.read(n)
+        secs = wav_seconds(wav)
+        if secs is None:
+            return self.send_json(400, {"error": "not a wav"})
+        if secs < 0.3 or secs > 61:
+            return self.send_json(400, {"error": "bad duration"})
+        if not APP.allow_ip(self.client_ip(), "asr"):
+            return self.send_json(429, {"error": "too many requests"})
+        if not APP._bump("asr_calls", 1, ASR_DAILY):
+            return self.send_json(429, {"error": "DailyCap"})
+        t0 = time.time()
+        try:
+            text, _ = APP.asr.recognize(wav)
+        except TTSError as e:
+            sys.stderr.write("asr error %s\n" % e)
+            return self.send_json(502, {"error": e.code})
+        return self.send_json(200, {"text": text, "secs": round(secs, 1), "ms": int((time.time() - t0) * 1000)})
 
     def send_audio(self, audio, speed, cached, ms):
         self.send_response(200)

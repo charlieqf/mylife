@@ -197,6 +197,22 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .composer .icon-btn{width:42px;height:42px;border-radius:21px}
 .send{background:var(--ink);color:var(--bg)!important}
 .send:disabled{opacity:.3}
+/* 语音输入：按住说话 */
+.composer .mic{color:var(--ink-2);flex:none}
+.hold{display:none;flex:1;height:42px;border-radius:21px;border:1px solid var(--line);background:var(--surface);font-size:15px;font-weight:600;color:var(--ink);
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
+.hold.on{background:var(--surface-2)}
+.hold:disabled{opacity:.45}
+.composer.voice textarea,.composer.voice .send{display:none}
+.composer.voice .hold{display:block}
+.rec{position:absolute;left:50%;bottom:calc(96px + var(--safe-b));transform:translateX(-50%);z-index:15;min-width:210px;padding:14px 18px;border-radius:18px;
+  background:var(--ink);color:var(--bg);text-align:center;box-shadow:var(--shadow);display:none;pointer-events:none}
+.rec.on{display:block}
+.rec.cancel{background:var(--danger);color:#fff}
+.rec .bars{display:flex;gap:4px;justify-content:center;align-items:center;height:30px;margin-bottom:6px}
+.rec .bars i{width:4px;height:6px;border-radius:2px;background:currentColor;transition:height .08s}
+.rec b{display:block;font-size:15px;font-variant-numeric:tabular-nums}
+.rec span{display:block;font-size:12px;opacity:.8;margin-top:2px}
 .mic{color:var(--ink-3)!important}
 
 /* 弹层 */
@@ -245,11 +261,11 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 <body>
 
 <aside class="desk-note">
-  <h1>MyLife 内测原型 v0.5</h1>
+  <h1>MyLife 内测原型 v0.6</h1>
   <p>用手机浏览器打开，体验最接近真实效果。</p>
   <p>流程：起个称呼 →（选填）资料与性格画像 → 选“理性”或“陪伴” → 聊天。</p>
   <p>回复由大模型实时生成（模型在后台固定）；服务器不可用时退回预设脚本。八字、紫微、占星为示例文字，正式版由排盘程序计算。资料和记录存在本机浏览器，对话内容会在服务器留存供内测团队查看。</p>
-  <p>语音朗读由服务器调用腾讯云语音合成。每个人格可单独选音色（男女声各 6 个）、调语速（默认每秒 5.6 字）。直接打开本地文件时，退回本机自带的语音合成。</p>
+  <p>语音朗读由服务器调用腾讯云语音合成。每个人格可单独选音色（男女声各 6 个）、调语速（默认每秒 5.6 字）。直接打开本地文件时，退回本机自带的语音合成。对话页可以切到“按住说话”，语音经腾讯云转成文字后发送，不保存录音。</p>
   <p>“半格”“平坐”为占位名。</p>
 </aside>
 
@@ -328,8 +344,11 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
     </div>
     <div class="scroll" id="chat-scroll"><div class="msgs" id="msgs"></div></div>
     <div class="suggest" id="suggest"></div>
+    <div class="rec" id="rec" aria-live="polite"><div class="bars" id="rec-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><b id="rec-t">0:00</b><span id="rec-tip">松开 发送 · 上滑 取消</span></div>
     <div class="composer">
+      <button class="icon-btn mic" id="btn-mic" type="button" aria-label="切换到语音输入" style="display:none"></button>
       <textarea id="in-msg" rows="1" placeholder="说说你在想的事…"></textarea>
+      <button class="hold" id="btn-hold" type="button">按住 说话</button>
       <button class="icon-btn send" id="btn-send" aria-label="发送" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
     </div>
   </section>
@@ -364,7 +383,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
       <div class="section-t">关于</div>
       <div class="group">
         <div class="item"><div class="grow">它们都是 AI<small>回复由 AI 生成，不代表任何真实人物；平坐的人生经历是虚构设定。不提供医疗、法律或投资建议。</small></div></div>
-        <div class="item"><div class="grow">版本<small>内测原型 v0.5 · AI 实时回复 · 腾讯云语音</small></div></div>
+        <div class="item"><div class="grow">版本<small>内测原型 v0.6 · AI 实时回复 · 腾讯云语音朗读与语音输入</small></div></div>
         <button class="item" id="btn-admin"><div class="grow">管理后台<small>原型演示：对话记录、人格档案、用户画像、热点</small></div></button>
       </div>
       <div style="height:20px"></div>
@@ -1110,7 +1129,7 @@ function greeting(id){
   return nick+'，来了啊。'+(q.kw.length>=2?'看了眼你的画像，说你'+q.kw[0]+'、'+q.kw[1]+'。像不像不要紧，':'')+'今天不用说什么大事，随便说说就行。';
 }
 var inMsg=$('#in-msg');
-function setSend(){$('#btn-send').disabled=S.busy||!inMsg.value.trim()}
+function setSend(){$('#btn-send').disabled=S.busy||!inMsg.value.trim();var h=$('#btn-hold');if(h)h.disabled=S.busy||(typeof VOICE!=='undefined'&&VOICE.state==='sending')}
 async function openChat(id,push_){
   if(S.busy&&id!==S.cur)return;
   if(id!==S.cur){stopSpeak();autoMemo(S.cur,true)}
@@ -1148,6 +1167,127 @@ inMsg.addEventListener('input',function(){inMsg.style.height='auto';inMsg.style.
 inMsg.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
 $('#btn-send').addEventListener('click',send);
 function send(){var t=inMsg.value.trim();if(!t||S.busy)return;inMsg.value='';inMsg.style.height='auto';setSend();handle(t)}
+
+/* ================= 语音输入：按住说话，松开发送 =================
+   浏览器里录成 16k 单声道 WAV（服务器不需要转码），发到 /api/asr（腾讯云一句话识别，单次 ≤60 秒，不保存录音）。
+   第一次切到语音模式时就申请麦克风权限，免得按住按钮时才弹授权框。 */
+var ICON_MIC='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+var ICON_KBD='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M7.5 14h9"/></svg>';
+var VOICE={ok:CHAT.ok&&!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)&&!!(window.AudioContext||window.webkitAudioContext),
+  mode:false,state:'idle',ctx:null,stream:null,src:null,node:null,chunks:[],level:0,t0:0,timer:0,startY:0,cancel:false,released:false,pid:null};
+VOICE.mode=VOICE.ok&&store.get('voiceMode',false);
+var hold=$('#btn-hold');
+function paintMic(){
+  var b=$('#btn-mic');b.style.display=VOICE.ok?'':'none';
+  $('.composer').classList.toggle('voice',VOICE.ok&&VOICE.mode);
+  b.innerHTML=VOICE.mode?ICON_KBD:ICON_MIC;b.setAttribute('aria-label',VOICE.mode?'切换到键盘输入':'切换到语音输入');
+  setSend();
+}
+function micError(e){
+  var n=e&&e.name;
+  toast(n==='NotAllowedError'||n==='SecurityError'?'没有麦克风权限。可以在浏览器设置里允许，或用输入法自带的语音输入':'这个浏览器用不了录音，可以用输入法自带的语音输入');
+  VOICE.mode=false;store.set('voiceMode',false);paintMic();
+}
+$('#btn-mic').addEventListener('click',function(){
+  if(VOICE.mode){VOICE.mode=false;store.set('voiceMode',false);paintMic();inMsg.focus();return}
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){
+    s.getTracks().forEach(function(t){t.stop()});
+    if(!store.get('voiceTold',false)){toast('按住说话，松开发送。语音经腾讯云转成文字，不保存录音');store.set('voiceTold',true)}
+    VOICE.mode=true;store.set('voiceMode',true);paintMic();
+  }).catch(micError);
+});
+function paintRec(){
+  var r=$('#rec');r.classList.add('on');r.classList.toggle('cancel',VOICE.cancel);
+  var s=VOICE.state==='rec'?Math.floor((Date.now()-VOICE.t0)/1000):0;
+  $('#rec-t').textContent=VOICE.state==='starting'?'准备中…':Math.floor(s/60)+':'+pad2(s%60)+(s>=50?' · 还能说 '+(60-s)+' 秒':'');
+  $('#rec-tip').textContent=VOICE.cancel?'松开手指，取消发送':'松开 发送 · 上滑 取消';
+  hold.textContent=VOICE.cancel?'松开 取消':'松开 发送';
+  var lv=Math.min(1,VOICE.level*6);
+  $$('#rec-bars i').forEach(function(b,i){var k=[.4,.65,.85,1,.85,.65,.4][i];b.style.height=(6+24*lv*k*(.7+Math.random()*.3))+'px'});
+}
+function recStop(){
+  clearInterval(VOICE.timer);
+  try{if(VOICE.node){VOICE.node.onaudioprocess=null;VOICE.node.disconnect()}if(VOICE.src)VOICE.src.disconnect()}catch(e){}
+  if(VOICE.stream)VOICE.stream.getTracks().forEach(function(t){t.stop()});
+  VOICE.node=VOICE.src=VOICE.stream=null;
+  try{if(VOICE.ctx&&VOICE.ctx.state==='running')VOICE.ctx.suspend()}catch(e){}  // 让 iPhone 的声音回到扬声器
+}
+function recReset(){
+  VOICE.state='idle';VOICE.cancel=false;VOICE.level=0;
+  hold.classList.remove('on');hold.textContent='按住 说话';$('#rec').classList.remove('on','cancel');setSend();
+}
+function recStart(){
+  var AC=window.AudioContext||window.webkitAudioContext;
+  try{if(!VOICE.ctx)VOICE.ctx=new AC();if(VOICE.ctx.state!=='running')VOICE.ctx.resume()}catch(e){micError(e);return}  // 在手势里启动，iPhone 才允许
+  VOICE.state='starting';VOICE.chunks=[];hold.classList.add('on');paintRec();
+  navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(function(stream){
+    if(VOICE.state!=='starting'||VOICE.released){
+      stream.getTracks().forEach(function(t){t.stop()});
+      if(VOICE.released){recReset();toast('按住按钮说话，说完再松开')}
+      return;
+    }
+    var ctx=VOICE.ctx;VOICE.stream=stream;
+    VOICE.src=ctx.createMediaStreamSource(stream);
+    VOICE.node=ctx.createScriptProcessor(4096,1,1);
+    VOICE.node.onaudioprocess=function(ev){
+      if(VOICE.state!=='rec')return;
+      var d=ev.inputBuffer.getChannelData(0),s=0;VOICE.chunks.push(new Float32Array(d));
+      for(var i=0;i<d.length;i+=16)s+=d[i]*d[i];VOICE.level=Math.sqrt(s/(d.length/16));
+    };
+    VOICE.src.connect(VOICE.node);VOICE.node.connect(ctx.destination);  // 输出全是 0，不会出声
+    VOICE.state='rec';VOICE.t0=Date.now();paintRec();
+    VOICE.timer=setInterval(function(){paintRec();if(Date.now()-VOICE.t0>=59500)recEnd(false)},100);
+  }).catch(function(e){recStop();recReset();micError(e)});
+}
+function pcmConcat(ch){var n=0;ch.forEach(function(c){n+=c.length});var o=new Float32Array(n),p=0;ch.forEach(function(c){o.set(c,p);p+=c.length});return o}
+function downsample(buf,from,to){
+  if(from<=to)return buf;
+  var r=from/to,n=Math.floor(buf.length/r),o=new Float32Array(n);
+  for(var i=0;i<n;i++){var s=Math.floor(i*r),e=Math.min(buf.length,Math.floor((i+1)*r)),sum=0;for(var j=s;j<e;j++)sum+=buf[j];o[i]=sum/Math.max(1,e-s)}
+  return o;
+}
+function encodeWav(f,rate){
+  var b=new ArrayBuffer(44+f.length*2),v=new DataView(b);
+  function s(o,t){for(var i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))}
+  s(0,'RIFF');v.setUint32(4,36+f.length*2,true);s(8,'WAVE');s(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);s(36,'data');v.setUint32(40,f.length*2,true);
+  for(var i=0,p=44;i<f.length;i++,p+=2){var x=Math.max(-1,Math.min(1,f[i]));v.setInt16(p,x<0?x*0x8000:x*0x7FFF,true)}
+  return new Blob([b],{type:'audio/wav'});
+}
+function recEnd(cancelled){
+  if(VOICE.state==='starting'){VOICE.released=true;return}  // 麦克风还没就绪就松手了：就绪后丢弃
+  if(VOICE.state!=='rec')return;
+  var dur=(Date.now()-VOICE.t0)/1000,cancel=cancelled||VOICE.cancel,rate=VOICE.ctx.sampleRate,chunks=VOICE.chunks;
+  recStop();
+  if(cancel){recReset();toast('已取消');return}
+  if(dur<0.6){recReset();toast('说话时间太短');return}
+  VOICE.state='sending';hold.classList.remove('on');hold.textContent='正在识别…';$('#rec').classList.remove('on','cancel');setSend();
+  var out=Math.min(rate,16000),wav=encodeWav(downsample(pcmConcat(chunks),rate,out),out),pid=VOICE.pid;
+  var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},40000):0;
+  fetch('/api/asr',{method:'POST',headers:{'Content-Type':'audio/wav'},body:wav,signal:ctl?ctl.signal:undefined})
+    .then(function(r){clearTimeout(tm);return r.json().catch(function(){return {}}).then(function(d){if(!r.ok){d.status=r.status;throw d}return d})})
+    .then(function(d){
+      recReset();var t=(d.text||'').trim();
+      if(!t){toast('没听清，再说一次');return}
+      if(pid!==S.cur||S.busy){VOICE.mode=false;store.set('voiceMode',false);paintMic();inMsg.value=t;setSend();toast('识别好了，确认后发送');return}
+      handle(t);
+    })
+    .catch(function(e){recReset();toast(e&&e.error==='DailyCap'?'今天的语音额度用完了，先打字吧':'语音识别暂时不可用，可以打字，或用输入法自带的语音输入')});
+}
+hold.addEventListener('contextmenu',function(e){e.preventDefault()});
+hold.addEventListener('pointerdown',function(e){
+  if(hold.disabled||VOICE.state!=='idle')return;
+  e.preventDefault();try{hold.setPointerCapture(e.pointerId)}catch(_){}
+  VOICE.startY=e.clientY;VOICE.cancel=false;VOICE.released=false;VOICE.pid=S.cur;
+  stopSpeak();recStart();
+});
+hold.addEventListener('pointermove',function(e){
+  if(VOICE.state!=='rec'&&VOICE.state!=='starting')return;
+  var c=VOICE.startY-e.clientY>70;if(c!==VOICE.cancel){VOICE.cancel=c;paintRec()}
+});
+hold.addEventListener('pointerup',function(){recEnd(false)});
+hold.addEventListener('pointercancel',function(){recEnd(true)});
+paintMic();
 
 /* ================= 菜单 / 结束对话 ================= */
 var mask=$('#mask');
