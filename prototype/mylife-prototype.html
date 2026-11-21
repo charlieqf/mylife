@@ -1160,9 +1160,9 @@ new MutationObserver(function(){
   var st=$('#stage');st.classList.toggle('thinking',!!msgs.querySelector('.typing'));st.classList.toggle('speaking',!!msgs.querySelector('.row.speaking'));
 }).observe(msgs,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
 function markLast(){var r=msgs.querySelectorAll('.row.ai[data-id]');r.forEach(function(x,i){x.classList.toggle('last',i===r.length-1)})}
-function paintSuggest(){$('#suggest').style.display=sessionMsgs(S.cur).some(function(m){return m.role==='user'})?'none':''}
+function paintSuggest(){$('#suggest').style.display=sessionMsgs(S.cur).some(function(m){return m.role==='user'||m.role==='rainbow'})?'none':''}
 function renderAll(){msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});markLast();paintSuggest();paintAgain();scrollDown()}
-function push(m){m.id=m.id||uid();m.t=Date.now();S.logs[S.cur].push(m);save();var n=nodeFor(m);msgs.appendChild(n);if(m.role==='ai')markLast();if(m.role==='user')paintSuggest();scrollDown();return n}
+function push(m){m.id=m.id||uid();m.t=Date.now();S.logs[S.cur].push(m);save();var n=nodeFor(m);msgs.appendChild(n);if(m.role==='ai')markLast();else paintSuggest();scrollDown();return n}
 function typeInto(el,text,done,sp){var i=0;var tm=setInterval(function(){i+=2;el.textContent=text.slice(0,i);scrollDown();if(i>=text.length){clearInterval(tm);done&&done()}},sp||28)}
 async function say(text,opts){
   opts=opts||{};var who=S.cur;
@@ -1311,12 +1311,13 @@ async function openCard(m,row){
   var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';msgs.appendChild(ty);scrollDown();
   var text=await req;ty.remove();
   if(S.cur===pid)await say(text||c.q,{wait:1});
-  S.busy=false;setSend();paintAgain();askVoice();
+  S.busy=false;setSend();paintAgain();
+  if(row.isConnected)row.scrollIntoView({block:'start',behavior:'smooth'});
 }
 // 没翻开的卡：直接开口说话、或点“先不抽”，就收起来，不挡路
 function dropCard(){
   var had=S.logs[S.cur].some(function(x){return x.role==='rainbow'&&!x.opened});if(!had)return;
-  S.logs[S.cur]=S.logs[S.cur].filter(function(x){return !(x.role==='rainbow'&&!x.opened)});save();
+  S.logs[S.cur]=S.logs[S.cur].filter(function(x){return !(x.role==='rainbow'&&!x.opened)});save();paintSuggest();
   $$('#msgs .row.rainbow.closed').forEach(function(r){r.classList.add('gone');setTimeout(function(){r.remove()},280)});
 }
 /* 长期记忆在服务器上，按这台设备的匿名 id 存（不用注册）。两个“你”越聊越了解你：成形度 0–5 决定场景里的人物有多清楚 */
