@@ -241,6 +241,8 @@ ASR_PER_MIN = int(os.environ.get("MYLIFE_ASR_PER_MIN", "20"))
 ASR_DAILY = int(os.environ.get("MYLIFE_ASR_DAILY", "3000"))
 ASR_MAX_BYTES = 2_200_000  # 60 s of 16 kHz mono 16-bit is ~1.92 MB
 CHAT_LOG_DIR = os.path.join(CACHE_DIR, "chatlog")
+FEEDBACK_DIR = os.path.join(CACHE_DIR, "feedback")
+FB_PER_MIN = 60
 FICTION_HINT = re.compile(r"(我(的|那间|这间)?(书店|店里|店)|我(女儿|闺女|老婆|妻子|爱人)|我还债|我做外贸|我那几年|我年轻的时候)")
 # Same signals as the page's R.crisis plus a few softer ones; the page answers the explicit ones with a
 # fixed safety message before calling us, this is the net for whatever reaches the model.
@@ -345,6 +347,43 @@ def build_messages(pid, req):
     return msgs
 
 
+CLOSING_PATH = os.environ.get("MYLIFE_CLOSING_STYLE", os.path.join(HERE, "prompts", "closing-style.txt"))
+CLOSING_TASK = ("【现在】用户要结束这次聊天了。用你（%s）的口吻，对用户说最后一句话，把今天聊的东西收住。"
+                "硬性要求：只说一句，不超过 40 个字；必须落在用户今天亲口说过的具体内容上，别人套不上；"
+                "不给建议，不提问，不用感叹号，不用表情，不说“今天聊了很多”“希望你”“加油”“一切都会好”这类话。")
+
+
+def build_closing(pid, req):
+    """System = persona + 收尾一句的写法 + task; user = today's transcript."""
+    name = PERSONAS[pid][0]
+    lines, said = [], []
+    for h in (req.get("history") or [])[-20:]:
+        c = clip(h.get("content"), 300)
+        if not c:
+            continue
+        if h.get("role") == "user":
+            lines.append("用户：" + c)
+            said.append(c)
+        else:
+            lines.append("你：" + c)
+    if not said:
+        raise ValueError("nothing to close")
+    system = "\n\n".join(p for p in (persona_prompt(pid), _read(CLOSING_PATH).strip(),
+                                     "用户的称呼：%s" % (clip(req.get("nick"), 12) or "朋友"),
+                                     CLOSING_TASK % name, OUTPUT_RULE) if p)
+    user = "这是这次的聊天记录：\n" + "\n".join(lines) + "\n\n用户要走了。说你的最后一句。"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}], "\n".join(said)
+
+
+def tidy_closing(text):
+    text = text.strip().strip("“”\"「」")
+    text = text.splitlines()[0].strip() if text else ""
+    if len(text) > 60:  # keep whole sentences
+        cut = max(text.rfind("。", 0, 60), text.rfind("，", 0, 60))
+        text = text[:cut + 1] if cut > 10 else text[:60]
+    return text
+
+
 MEMO_PROMPT = ("下面是一段用户和 AI 人格的聊天。把值得以后记住的事写成对用户说的话，必须以“你”开头，最多 2 条，"
                "每条不超过 30 个字，只写用户说过的事实、处境或在意的东西，不写建议、不评价、不写 AI 说了什么。"
                "例：你在纠结要不要辞职，最烦的是老板周末找你。"
@@ -365,9 +404,10 @@ class App:
         self.voices = {str(v["id"]): v for v in self.catalog["voices"]}
         self.pool = ThreadPoolExecutor(max_workers=6)
         self.lock = threading.Lock()
-        self.hits = {"tts": defaultdict(deque), "chat": defaultdict(deque), "asr": defaultdict(deque)}
+        self.hits = {"tts": defaultdict(deque), "chat": defaultdict(deque), "asr": defaultdict(deque), "fb": defaultdict(deque)}
         os.makedirs(CACHE_DIR, exist_ok=True)
         os.makedirs(CHAT_LOG_DIR, exist_ok=True)
+        os.makedirs(FEEDBACK_DIR, exist_ok=True)
         self.usage_path = os.path.join(CACHE_DIR, "usage.json")
         try:
             with open(self.usage_path) as f:
@@ -378,7 +418,7 @@ class App:
     # -- limits
     def allow_ip(self, ip, kind="tts"):
         now = time.time()
-        limit = {"tts": PER_IP_PER_MIN, "chat": CHAT_PER_MIN, "asr": ASR_PER_MIN}[kind]
+        limit = {"tts": PER_IP_PER_MIN, "chat": CHAT_PER_MIN, "asr": ASR_PER_MIN, "fb": FB_PER_MIN}[kind]
         with self.lock:
             q = self.hits[kind][ip]
             while q and now - q[0] > 60:
@@ -452,8 +492,38 @@ class App:
                 out.append(ln)
         return out[:2]
 
+    def closing(self, pid, req, ip):
+        """One sentence that sums up the session, said when the user taps 结束本次对话."""
+        if not self._bump("chat_calls", 1, CHAT_DAILY):
+            raise LLMError("DailyCap")
+        msgs, said = build_closing(pid, req)
+        t0 = time.time()
+        used = CHAT_PRIMARY
+        try:
+            text = tidy_closing(llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs, max_tokens=120, temperature=0.7))
+            if not text:
+                raise LLMError("empty reply")
+        except LLMError as e:
+            sys.stderr.write("closing primary failed (%s), using fallback\n" % e)
+            used = CHAT_FALLBACK
+            text = tidy_closing(llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs, max_tokens=120, temperature=0.7))
+        if not text:
+            raise LLMError("empty reply")
+        text = postprocess(pid, said, text)
+        ms = int((time.time() - t0) * 1000)
+        self.log_chat({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": ip, "p": pid, "kind": "closing",
+                       "nick": clip(req.get("nick"), 12), "user": said[-300:], "reply": text, "model": used[1], "ms": ms})
+        return text, used[1], ms
+
     def log_chat(self, rec):
-        path = os.path.join(CHAT_LOG_DIR, datetime.date.today().isoformat() + ".jsonl")
+        self._append(CHAT_LOG_DIR, rec)
+
+    def log_feedback(self, rec):
+        """👍/👎 on replies: the upvoted ones feed the next round of distilling (tools/upvoted.py)."""
+        self._append(FEEDBACK_DIR, rec)
+
+    def _append(self, folder, rec):
+        path = os.path.join(folder, datetime.date.today().isoformat() + ".jsonl")
         with self.lock:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -547,8 +617,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        if path in ("/api/chat", "/api/memo"):
+        if path in ("/api/chat", "/api/memo", "/api/closing"):
             return self.handle_chat(path)
+        if path == "/api/fb":
+            return self.handle_fb()
         if path == "/api/asr":
             return self.handle_asr()
         if path != "/api/tts":
@@ -597,6 +669,9 @@ class Handler(BaseHTTPRequestHandler):
             pid = str(req.get("p", ""))
             if pid not in PERSONAS:
                 return self.send_json(400, {"error": "unknown persona"})
+            if path == "/api/closing":
+                text, model, ms = APP.closing(pid, req, self.client_ip())
+                return self.send_json(200, {"text": text, "model": model, "ms": ms})
             reply, model, ms = APP.chat(pid, req, self.client_ip())
         except ValueError as e:
             return self.send_json(400, {"error": str(e)})
@@ -604,6 +679,22 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("chat error %s\n" % e)
             return self.send_json(429 if str(e) == "DailyCap" else 502, {"error": str(e)[:120]})
         return self.send_json(200, {"reply": reply, "model": model, "ms": ms})
+
+    def handle_fb(self):
+        """Body: {p, mid, v: 1|-1|0, reply, user}. Logged for distilling upvoted replies."""
+        try:
+            req = self.read_json(8192)
+            pid, v = str(req.get("p", "")), int(req.get("v", 0))
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        if pid not in PERSONAS or v not in (-1, 0, 1):
+            return self.send_json(400, {"error": "bad request"})
+        if not APP.allow_ip(self.client_ip(), "fb"):
+            return self.send_json(429, {"error": "too many requests"})
+        APP.log_feedback({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": self.client_ip(), "p": pid,
+                          "mid": clip(req.get("mid"), 40), "v": v, "reply": clip(req.get("reply"), 600),
+                          "user": clip(req.get("user"), 300)})
+        return self.send_json(200, {"ok": True})
 
     def handle_asr(self):
         """Body: a 16 kHz mono 16-bit WAV recorded in the page. The audio is not stored."""

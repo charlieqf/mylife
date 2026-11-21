@@ -195,6 +195,14 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .row{display:flex;flex-direction:column;max-width:100%}
 .row.me{align-items:flex-end}
 .row.ai{align-items:flex-start}
+.row.closing{align-self:center;align-items:center;text-align:center;max-width:88%;margin:10px 0 4px;padding:16px 22px 16px;border-radius:22px;background:var(--surface);border:1px solid var(--glass-line);transition:border-color .3s}
+.row.closing .seal{font-size:11px;letter-spacing:.3em;line-height:1;padding:4px 5px 4px 8px;border:1px solid var(--acc);color:var(--acc);border-radius:5px;margin-bottom:10px;opacity:.9}
+.row.closing p{font-size:16.5px;line-height:1.75;letter-spacing:.03em;white-space:pre-wrap}
+.row.closing.speaking{border-color:var(--acc)}
+#sh-end{--acc:var(--b)} #sh-end[data-p="pingzuo"]{--acc:var(--p)}
+.end-line{text-align:center;margin:4px 6px 18px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.end-line .seal{display:inline-block;font-size:11px;letter-spacing:.3em;line-height:1;padding:4px 5px 4px 8px;border:1px solid var(--acc);color:var(--acc);border-radius:5px;margin-bottom:10px}
+.end-line p{font-size:16px;line-height:1.75;letter-spacing:.03em}
 .bubble{max-width:84%;padding:10px 14px;border-radius:20px;white-space:pre-wrap;word-break:break-word;font-size:15.5px;line-height:1.65}
 .row.ai .bubble{background:var(--surface);border:1px solid var(--glass-line);border-top-left-radius:8px;transition:border-color .3s}
 .row.me .bubble{background:var(--me);color:var(--ink);border-top-right-radius:8px}
@@ -317,6 +325,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   <p>回复由大模型实时生成（模型在后台固定）；服务器不可用时退回预设脚本。八字、紫微、占星为示例文字，正式版由排盘程序计算。资料和记录存在本机浏览器，对话内容会在服务器留存供内测团队查看。</p>
   <p>语音朗读由服务器调用腾讯云语音合成。每个人格可单独选音色（男女声各 6 个）、调语速（默认每秒 5.6 字）。直接打开本地文件时，退回本机自带的语音合成。对话页可以切到“按住说话”，语音经腾讯云转成文字后发送，不保存录音。</p>
   <p>界面：粉彩天空、平静水面、几何台阶，人物在场景里看着你说话；插画为原创几何风格。跟随系统深色模式切换成黄昏配色。</p>
+  <p>点“结束本次对话”时，人格先用一句话把这次聊的收住（句式从公开平台的高赞回复里提炼），再请你打分。回复下的赞和踩会记到服务器，用来继续调这句话。</p>
   <p>“半格”“平坐”为占位名。</p>
 </aside>
 
@@ -465,6 +474,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   <div class="sheet" id="sh-menu"><div class="grab"></div><div id="menu-items"></div></div>
   <div class="sheet" id="sh-end">
     <div class="grab"></div>
+    <div class="end-line" id="end-line" style="display:none"><span class="seal">今日</span><p></p></div>
     <h3>聊完了，感觉怎么样？</h3>
     <p class="desc">比聊之前更好，还是更糟？这是内测里最重要的一个问题。</p>
     <div class="rate" id="rate">
@@ -1035,7 +1045,7 @@ $('#btn-edit-profile').addEventListener('click',function(){openAbout(true)});
 
 /* ================= 选人首页 ================= */
 var THUMB_VB={pingzuo:'70 114 260 108',bange:'96 74 276 116'};
-function lastText(id){var l=S.logs[id].filter(function(m){return m.role==='ai'||m.role==='user'});return l.length?l[l.length-1].text:''}
+function lastText(id){var l=S.logs[id].filter(function(m){return m.role==='ai'||m.role==='user'||m.role==='closing'});return l.length?l[l.length-1].text:''}
 function goHome(){
   stopSpeak();stack=['home'];show('home');
   ['bange','pingzuo'].forEach(function(p){autoMemo(p,true)});
@@ -1072,6 +1082,7 @@ function nodeFor(m){
       hb.addEventListener('click',function(){openChat(m.handoff,true)});row.appendChild(hb)}
   }
   else if(m.role==='divider'){row.className='divider';row.textContent=m.text}
+  else if(m.role==='closing'){row.className='row closing';row.innerHTML='<span class="seal">今日</span><p></p>';row.querySelector('p').textContent=m.text}
   else if(m.role==='hot'){
     var t=TOPICS.filter(function(x){return x.id===m.topic})[0]||TOPICS[0];
     row.className='card hot';
@@ -1081,6 +1092,11 @@ function nodeFor(m){
   else if(m.role==='safety'){row.className='card safety';row.innerHTML='<div class="t">先停一下</div><p></p>';row.querySelector('p').textContent=m.text}
   return row;
 }
+function sendFb(pid,m){
+  if(!CHAT.ok)return;var l=S.logs[pid],i=l.indexOf(m),prev='';
+  while(--i>=0){if(l[i].role==='user'){prev=l[i].text;break}}
+  try{fetch('/api/fb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p:pid,mid:m.id,v:m.fb||0,reply:String(m.text).slice(0,600),user:String(prev).slice(0,300)})}).catch(function(){})}catch(e){}
+}
 function paintFb(row,v){row.querySelectorAll('[data-fb]').forEach(function(b){b.classList.toggle('on',+b.dataset.fb===v)})}
 msgs.addEventListener('click',function(e){
   var sp=e.target.closest('[data-speak]');
@@ -1088,7 +1104,7 @@ msgs.addEventListener('click',function(e){
     if(sp.classList.contains('on')){stopSpeak();return}speak(mm.text,S.cur,mm.id);return}
   var b=e.target.closest('[data-fb]');if(!b)return;
   var row=b.closest('.row'),m=S.logs[S.cur].filter(function(x){return x.id===row.dataset.id})[0];if(!m)return;
-  var v=+b.dataset.fb;m.fb=m.fb===v?0:v;paintFb(row,m.fb);save();
+  var v=+b.dataset.fb;m.fb=m.fb===v?0:v;paintFb(row,m.fb);save();sendFb(S.cur,m);
   if(m.fb===1)toast('记下了：这句有用');if(m.fb===-1)toast('记下了：团队会看这句哪里不对');
 });
 // 场景里的人物跟着对话动：在想（输入中）时微微歪头，朗读时嘴在动
@@ -1463,17 +1479,39 @@ $('#btn-menu').addEventListener('click',function(){
 });
 $('#menu-items').addEventListener('click',function(e){
   var b=e.target.closest('[data-go]');if(!b)return;var g=b.dataset.go;
-  if(g==='end'){openSheet('#sh-end');resetEnd();return}
+  if(g==='end'){closeSheets();endTalk();return}
   if(g==='voice'){openVoiceSheet(S.cur);return}
   closeSheets();
   if(g==='switch'){if(!S.busy)openChat(other(S.cur),true);return}
   nav(g);
 });
+/* 结束本次对话：人格先用一句话把这次聊的收住（句式从高赞回复里提炼，见 prompts/closing-style.txt），再弹评分 */
+function sessionMsgs(id){var l=S.logs[id],i=l.length;while(i>0&&l[i-1].role!=='divider')i--;return l.slice(i)}
+async function endTalk(){
+  if(S.busy)return;
+  var id=S.cur,sess=sessionMsgs(id),said=sess.filter(function(m){return m.role==='user'}).length;
+  if(CHAT.ok&&said>=1&&!sess.some(function(m){return m.role==='closing'})){
+    S.busy=true;setSend();
+    var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';
+    msgs.appendChild(ty);scrollDown();
+    var hist=sess.filter(function(m){return m.role==='user'||m.role==='ai'}).slice(-20).map(function(m){return {role:m.role==='user'?'user':'assistant',content:String(m.text).slice(0,300)}});
+    var line=null;
+    try{var d=await postJSON('/api/closing',{p:id,nick:S.user?S.user.nick:'',history:hist},20000);line=d&&d.text}catch(e){}
+    ty.remove();
+    if(line&&S.cur===id){await say(line,{role:'closing',wait:1});await sleep(2200)}
+    S.busy=false;setSend();
+  }
+  if(S.cur!==id||!$('#s-chat').classList.contains('on'))return;
+  var cl=sessionMsgs(id).filter(function(m){return m.role==='closing'}).slice(-1)[0],el=$('#end-line');
+  $('#sh-end').dataset.p=id;el.style.display=cl?'':'none';el.querySelector('p').textContent=cl?cl.text:'';
+  openSheet('#sh-end');resetEnd();
+}
 var rating=0;
 function resetEnd(){rating=0;$('#end-note').value='';$$('#rate button').forEach(function(b){b.classList.remove('on')});$('#btn-end').disabled=true}
 $('#rate').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;rating=+b.dataset.v;$$('#rate button').forEach(function(x){x.classList.toggle('on',x===b)});$('#btn-end').disabled=false});
 $('#btn-end').addEventListener('click',async function(){
   var id=S.cur,log=S.logs[id],lastUser=log.filter(function(m){return m.role==='user'}).slice(-1)[0];
+  var closed=sessionMsgs(id).some(function(m){return m.role==='closing'});  // 已经说过收尾一句，就不再补一句告别
   S.sessions.push({id:uid(),persona:id,t:Date.now(),rating:rating,note:$('#end-note').value.trim(),msgs:log.filter(function(m){return m.role==='user'||m.role==='ai'}).length});
   closeSheets();push({role:'divider',text:'本次对话已结束'});
   S.busy=true;setSend();
@@ -1487,8 +1525,8 @@ $('#btn-end').addEventListener('click',async function(){
     }
   }
   save();
-  if(id==='bange')await say(rating<=2?'这次没帮上你，我记下了。下次换个问法。':'我记下了。下次见面，我会问你后来怎么样了。',{wait:500});
-  else await say(rating<=2?'今天没陪好你，抱歉。改天再来坐坐。':'好。今天就到这儿，早点睡。改天再来坐坐。',{wait:500});
+  if(rating<=2)await say(id==='bange'?'这次没帮上你，我记下了。下次换个问法。':'今天没陪好你，抱歉。改天再来坐坐。',{wait:500});
+  else if(!closed)await say(id==='bange'?'我记下了。下次见面，我会问你后来怎么样了。':'好。今天就到这儿，早点睡。改天再来坐坐。',{wait:500});
   S.busy=false;setSend();toast('感谢反馈');
 });
 
