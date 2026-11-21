@@ -31,6 +31,7 @@ def server():
     os.environ["MYLIFE_CLOSING_STYLE"] = os.path.join(prompts, "closing-style.txt")
     os.environ["MYLIFE_CARDS"] = os.path.join(prompts, "rainbow-cards.json")
     os.environ.setdefault("MYLIFE_CACHE", os.path.join(ROOT, ".eval-cache"))
+    os.environ.setdefault("MYLIFE_DATA", os.path.join(ROOT, ".eval-cache", "data"))
     sys.path.insert(0, os.path.join(ROOT, "server"))
     import mylife_server
     return mylife_server

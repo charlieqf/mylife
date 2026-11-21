@@ -1,5 +1,5 @@
 [Unit]
-Description=MyLife phase-0 demo backend (voice catalog + Tencent TTS proxy)
+Description=MyLife phase-0 demo backend (chat, memory, TTS/ASR proxy, conversation archive)
 After=network-online.target
 Wants=network-online.target
 
@@ -10,6 +10,7 @@ Group=mylife
 EnvironmentFile=/etc/mylife/secrets.env
 Environment=MYLIFE_PORT=18960
 Environment=MYLIFE_CACHE=/var/cache/mylife
+Environment=MYLIFE_DATA=/var/lib/mylife
 Environment=MYLIFE_TTS_DAILY_CHARS=100000
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /opt/mylife/app/mylife_server.py
@@ -21,6 +22,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/cache/mylife
+# /var/lib/mylife: long-term memory (users/) and the conversation archive (logs/); never treat it as cache
+StateDirectory=mylife
+StateDirectoryMode=0750
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

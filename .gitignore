@@ -7,3 +7,6 @@
 # 评测缓存与工具运行产物
 .eval-cache/
 __pycache__/
+
+# 从服务器拉下来的对话存档、记忆和分析报告（tools/chatlog.py），不进仓库
+data/

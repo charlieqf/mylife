@@ -3,7 +3,8 @@
 #   bash deploy/deploy.sh            # page + backend + configs
 #   bash deploy/deploy.sh --secrets  # also push .secrets/mylife.env to /etc/mylife/secrets.env
 # One-time prerequisites already done on the server (2026-11-21): system user `mylife`,
-# /opt/mylife/{app,www}, /var/cache/mylife, /etc/mylife, and the Let's Encrypt cert:
+# /opt/mylife/{app,www}, /var/cache/mylife, /etc/mylife, and the Let's Encrypt cert
+# (/var/lib/mylife is created by systemd: StateDirectory=mylife):
 #   certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/certbot-cloudflare.ini \
 #     --dns-cloudflare-propagation-seconds 30 --cert-name mylife.instmarket.com.au -d mylife.instmarket.com.au
 set -euo pipefail
@@ -45,6 +46,15 @@ install -m 644 $STAGE/mylife.service /etc/systemd/system/mylife.service
 install -m 644 $STAGE/nginx-mylife.conf /etc/nginx/sites-available/mylife.conf
 ln -sfn /etc/nginx/sites-available/mylife.conf /etc/nginx/sites-enabled/mylife.conf
 systemctl daemon-reload
+# 2026-11-22: memory and logs moved from the cache dir to /var/lib/mylife (logs became the archive). One-time, idempotent.
+if [ -d /var/cache/mylife/users ] && [ ! -e /var/lib/mylife/users ]; then
+  systemctl stop mylife.service
+  mkdir -p /var/lib/mylife/legacy
+  mv /var/cache/mylife/users /var/lib/mylife/users
+  for d in chatlog feedback; do [ -d /var/cache/mylife/\$d ] && mv /var/cache/mylife/\$d /var/lib/mylife/legacy/\$d; done
+  chown -R mylife:mylife /var/lib/mylife
+  echo 'migrated memory + old logs to /var/lib/mylife'
+fi
 systemctl enable --quiet mylife.service
 systemctl restart mylife.service
 nginx -t

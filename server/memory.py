@@ -26,6 +26,15 @@ UID_RE = re.compile(r"^[A-Za-z0-9_-]{16,48}$")
 NOTE_CAP, EPISODE_CAP = 80, 300
 LEVELS = (3, 8, 16, 28, 45)  # score thresholds for how "formed" the other selves look (0..5)
 NEW_USER_LINE = "（你们刚认识，你还不知道他的任何事：不要提“上次”“上周”“那件事”这类往事。）"
+# How much to say when he brings something heavy or asks to be talked through it; grows with how well the selves
+# know him. (up to this level, hard cap in 字 that the server trims to, what the prompt asks for)
+DEPTH = ((1, 460, "你还不太了解他：他讲一件压着他的事、要你开导时，围着他刚说的话说两三小段，不超过四百字；有内容，但不往外猜他的生活，不装作很懂他。"),
+         (3, 680, "你对他有些了解了：他讲一件压着他的事、要你开导时，说三五小段，不超过六百字；能连上他以前说过的就连上。"),
+         (5, 900, "你已经挺了解他了：他讲一件压着他的事、要你开导时，可以把话说透，不超过八百字；把今天的事和他以前说过的事、他的习惯连起来。"))
+
+
+def depth(lv):
+    return next(d for d in DEPTH if lv <= d[0])
 
 CONSOLIDATE_PROMPT = """你在帮一个人的“另一个自己”整理记忆。下面有三部分：已经知道的他（画像和记住的事），以及这次新的聊天记录。
 读完这次的聊天，输出一个 JSON 对象（只输出 JSON，不要别的字）：
@@ -172,8 +181,7 @@ class Memory:
             n_user = sum(1 for r in new if r.get("role") == "user")
             convo = []
             for r in new[-60:]:
-                who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or self.names.get(r.get("p"), "AI")
-                convo.append("%s：%s" % (who, str(r.get("text", ""))[:300]))
+                convo.append(self._line(r, 300))
             known = ["【他是怎样的人】", prof["portrait"] or "（还不了解）", "【已经记住的事】"]
             known += ["%s｜%s" % (x["id"], x["text"]) for x in prof["notes"][:60]] or ["（还没有）"]
             msgs = [{"role": "system", "content": CONSOLIDATE_PROMPT},
@@ -232,17 +240,30 @@ class Memory:
                 "notes": [{"id": x["id"], "text": x["text"], "d": x["d"]} for x in prof["notes"]],
                 "episodes": prof["episodes"][-10:]}
 
-    def context(self, uid, recent_user_text):
-        """The block that goes into the system prompt: who this person is, as far as the selves know."""
+    def reply_cap(self, uid):
+        """Most 字 a chat reply may have for this user (see DEPTH)."""
         with self._lock(uid):
             prof = self._load(uid)
+        return depth(self.level(prof)[0])[1]
+
+    def _line(self, r, n):
+        who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or self.names.get(r.get("p"), "AI")
+        return "%s：%s" % (who, " ".join(str(r.get("text", "")).split())[:n])
+
+    def context(self, uid, recent_user_text, pid=None):
+        """The block that goes into the system prompt: who this person is, as far as the selves know. Both selves
+        share it; `pid` is the one he is talking to, and what he said to the other one since the last fold is added
+        verbatim, so switching selves never meets a stranger (pid=None adds every unfolded line)."""
+        with self._lock(uid):
+            prof = self._load(uid)
+            fresh = [r for r in self._read_log(uid, prof["upto"])[0]
+                     if r.get("p") != pid and r.get("role") in ("user", "ai", "card")][-12:]
         lv, days = self.level(prof)
         out = ["【你对他的了解】（两个“另一个他”共用；他说过的才算数）",
                "认识第 %d 天，他一共说过 %d 句话。" % (days, prof["msgs"])]
         if prof["msgs"] == 0:
             out.append(NEW_USER_LINE)
-        elif lv <= 1:
-            out.append("你们还不太熟：多听，少下判断，别装作很懂他。")
+        out.append(depth(lv)[2])
         if prof["portrait"]:
             out.append("他是怎样的人：" + prof["portrait"])
         if prof["notes"]:
@@ -259,4 +280,8 @@ class Memory:
                 if hits:
                     out.append("可能跟今天有关的往事：")
                     out += ["- %s：%s" % (e["d"], e["text"]) for e in hits]
+        if fresh:
+            out.append("他最近跟另一个自己聊的，还没整理进上面（最后一句在 %s）："
+                       % str(fresh[-1].get("t", ""))[5:16].replace("T", " "))
+            out += [self._line(r, 150) for r in fresh]
         return "\n".join(out)

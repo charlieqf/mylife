@@ -6,14 +6,20 @@ Secrets come from the environment (systemd EnvironmentFile=/etc/mylife/secrets.e
 
 Endpoints
   GET  /api/health | /api/voices | /api/cards | /api/persona?p= | /api/self?u=
-  POST /api/chat     {p, u, nick, profile, notme, history}   -> {reply, model, ms}
-  POST /api/card     {p, u, nick, id}                         -> {text, model, ms}   彩虹卡开场
-  POST /api/closing  {p, u, nick, history}                    -> {text, model, ms}   收尾一句
+  POST /api/chat     {p, u, nick, profile, notme, history}   -> {reply, model, ms, tid}
+  POST /api/card     {p, u, id}                               -> {ok}   今天抽到的彩虹卡记进长期记忆（卡由页面念，不接话）
+  POST /api/open     {p, u, nick}                             -> {text, model, ms, tid}   进对话时先开口（两个人格记忆共享）
+  POST /api/closing  {p, u, nick, history}                    -> {text, model, ms, tid}   收尾一句
   POST /api/sync     {u}  fold the latest talk into long-term memory (server/memory.py)
   POST /api/self/forget {u, id} | /api/self/wipe {u} | /api/self/import {u, notes}
-  POST /api/fb       {p, mid, v, reply, user}                 👍/👎, logged for distilling
+  POST /api/fb       {p, u, tid, mid, v, reply, user}         👍/👎 on one reply
+  POST /api/event    {p, u, kind: local|rating, ...}          what the page did on its own: scripted replies, session ratings
   POST /api/tts      {v, cps, p, t}  -> audio/mpeg (Tencent TextToVoice, cached per chunk)
-  POST /api/asr      16 kHz mono WAV -> {text}  (Tencent 一句话识别, audio not stored)
+  POST /api/asr?u=&p= 16 kHz mono WAV -> {text}  (Tencent 一句话识别, audio not stored)
+
+Everything said goes to one archive, $MYLIFE_DATA/logs/<day>.jsonl, one record per line with a `kind`: chat, open,
+closing, card, fb, local, rating, asr, error. Chat records carry the exact model input (history + memory block + prompt
+version), so tools/chatlog.py can replay real conversations against new prompts. Long-term memory: $MYLIFE_DATA/users.
 """
 import base64
 import datetime
@@ -38,12 +44,14 @@ from memory import NEW_USER_LINE, Memory, valid_uid, write_json_atomic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOG_PATH = os.environ.get("MYLIFE_VOICES", os.path.join(HERE, "voices.json"))
-CACHE_DIR = os.environ.get("MYLIFE_CACHE", "/var/cache/mylife")
+CACHE_DIR = os.environ.get("MYLIFE_CACHE", "/var/cache/mylife")  # TTS audio, daily counters: safe to delete
+DATA_DIR = os.environ.get("MYLIFE_DATA", "/var/lib/mylife")      # memory and the conversation archive: keep
+LOG_DIR = os.path.join(DATA_DIR, "logs")
 BIND = os.environ.get("MYLIFE_BIND", "127.0.0.1")
 PORT = int(os.environ.get("MYLIFE_PORT", "18960"))
 DAILY_CHAR_CAP = int(os.environ.get("MYLIFE_TTS_DAILY_CHARS", "100000"))
 PER_IP_PER_MIN = int(os.environ.get("MYLIFE_TTS_PER_MIN", "40"))
-MAX_TEXT = 600
+MAX_TEXT = 1000  # the longest chat reply (memory.DEPTH tops out at 900 字) must still be readable aloud
 CHUNK = 140  # Tencent TextToVoice accepts <= 150 Chinese characters per call
 
 # Same definition as countChars() in the page: what counts as a spoken character.
@@ -243,15 +251,22 @@ STYLE_PATH = os.environ.get("MYLIFE_STYLE", os.path.join(PROMPT_DIR, "de-ai-styl
 SELF_FRAME_PATH = os.environ.get("MYLIFE_SELF_FRAME", os.path.join(PROMPT_DIR, "self-frame.txt"))
 CLOSING_PATH = os.environ.get("MYLIFE_CLOSING_STYLE", os.path.join(PROMPT_DIR, "closing-style.txt"))
 CARDS_PATH = os.environ.get("MYLIFE_CARDS", os.path.join(PROMPT_DIR, "rainbow-cards.json"))
-OUTPUT_RULE = "只输出你要说的话本身：纯文本，不加引号，不加名字前缀，不写动作或旁白。"
+OUTPUT_RULE = ("只输出你要说的话本身：纯文本，不加引号，不加名字前缀，不写动作或旁白。"
+               "说到他的事，只用他这次聊天里说过的和“你对他的了解”里写着的；“上次”“你说过”“你每次”这类话，"
+               "只在那里有记录时才说。没有的细节不编，拿不准就问。")
+CHAT_MAX_TOKENS = 1100  # room for REPLY_MAX 字; everyday replies stay short anyway
+REPLY_MAX = 900  # hard cap on a chat reply in 字 (memory.DEPTH lowers it while the selves barely know him)
 CHAT_PER_MIN = int(os.environ.get("MYLIFE_CHAT_PER_MIN", "20"))
 CHAT_DAILY = int(os.environ.get("MYLIFE_CHAT_DAILY", "3000"))
 ASR_PER_MIN = int(os.environ.get("MYLIFE_ASR_PER_MIN", "20"))
 ASR_DAILY = int(os.environ.get("MYLIFE_ASR_DAILY", "3000"))
 ASR_MAX_BYTES = 2_200_000  # 60 s of 16 kHz mono 16-bit is ~1.92 MB
 FB_PER_MIN = 60
-CHAT_LOG_DIR = os.path.join(CACHE_DIR, "chatlog")
-FEEDBACK_DIR = os.path.join(CACHE_DIR, "feedback")
+# "用大麦哥的口吻开导我": the selves already talk in their own way, so the model never sees the name (it would only
+# start explaining that it won't imitate anyone). Only asks aimed at the self, or naming a public figure, are cut.
+STYLE_ASK = re.compile(r"(?:请你?|麻烦你?|你(?:能不能|可以|就)?|能不能)?(?:用|按照?|学|模仿|以)([^，。！？,.!?\s]{1,20}?)的?"
+                       r"(?:口吻|风格|语气|腔调|说话方式|方式)(?:来)?(?:回复|回答|回)?(?:我)?(?:一下)?")
+STYLE_WHO = re.compile(r"黄执中|大麦哥|博主|网红|名人|明星|主播|老师|抖音|小红书|B站|知乎|奇葩说")
 # Same signals as the page's R.crisis plus a few softer ones; the page answers the explicit ones with a
 # fixed safety message before calling us, this is the net for whatever reaches the model.
 CRISIS = re.compile(r"(不想活|自杀|想死|轻生|结束生命|活着(好|真|太|也)?没(什么)?意思|活着没有意义|活着有什么意义"
@@ -260,7 +275,10 @@ SAFETY_LINE = "如果你有伤害自己的念头，请马上联系身边信任�
 
 
 def postprocess(user_text, reply):
-    reply = reply.strip().strip("“”\"")
+    reply = reply.strip()
+    if len(reply) > 1 and reply[0] in "“\"" and reply[-1] in "”\"" and not re.search("[“”\"]", reply[1:-1]):
+        reply = reply[1:-1].strip()  # the model wrapped the whole reply in quotes; a quote that opens a sentence stays
+    reply = re.sub(r'"([^"\n]{1,60})"', r"“\1”", reply)  # 中文里的成对半角引号换成全角
     if CRISIS.search(user_text or "") and "12356" not in reply:
         reply += "\n\n" + SAFETY_LINE
     return reply
@@ -374,8 +392,7 @@ def build_messages(pid, req, know=None):
     notme = clip(req.get("notme"), 200)
     if notme:
         ctx.append("用户标了“不像我”的画像条目（不要再拿这些说事）：" + notme)
-    if know:
-        ctx.append(know)
+    ctx.append(know or NEW_USER_LINE)
     ctx.append("【此刻】今天是 %s。用户正在和你（%s）聊。另一位是%s（%s）；当用户需要的东西%s更合适时，可以建议去找%s。"
                % (datetime.date.today().isoformat(), name, oname, okind, oname, oname))
     msgs = [{"role": "system", "content": system_prompt(pid, "\n".join(ctx))}]
@@ -389,6 +406,7 @@ def build_messages(pid, req, know=None):
                 msgs.append({"role": role, "content": content})
     if msgs[-1]["role"] != "user":
         raise ValueError("last message must be from the user")
+    msgs[-1]["content"] = strip_style_ask(msgs[-1]["content"])
     return msgs
 
 
@@ -414,6 +432,43 @@ def build_closing(pid, req):
     return [{"role": "system", "content": system}, {"role": "user", "content": user}], "\n".join(said)
 
 
+def strip_style_ask(text):
+    """Drop "请用XX的口吻" from what he said (see STYLE_ASK); keep the text as is if nothing else would be left."""
+    def cut(m):
+        asked_self = not m.group(0).startswith(("用", "按", "学", "模仿", "以"))
+        return "" if asked_self or STYLE_WHO.search(m.group(1)) else m.group(0)
+    out = STYLE_ASK.sub(cut, text).strip(" ，,")
+    return out if re.search(r"[一-龥A-Za-z]", out) else text
+
+
+@functools.lru_cache(maxsize=None)
+def prompt_version(pid):
+    """Short hash of everything static in a persona's prompt; logged so replies can be compared across prompt edits."""
+    return hashlib.sha1(system_prompt(pid).encode("utf-8")).hexdigest()[:8]
+
+
+def fit(text, cap=REPLY_MAX):
+    """Hard length cap in 字 (whitespace not counted). Keeps whole paragraphs from the top plus the last one, where a
+    long reply lands; if the first paragraph alone is too long, cuts it at the last sentence end that fits."""
+    size = lambda s: len(re.sub(r"\s", "", s))
+    if size(text) <= cap:
+        return text
+    sep = "\n\n" if "\n\n" in text else "\n"
+    paras = [p.strip() for p in text.split("\n") if p.strip()]
+    last = paras.pop() if len(paras) > 1 and size(paras[-1]) <= cap // 3 else ""
+    kept, n = [], size(last)
+    for p in paras:
+        if n + size(p) > cap:
+            break
+        kept.append(p)
+        n += size(p)
+    if not kept:
+        head, n = paras[0], size(last)
+        ends = [i + 1 for i, ch in enumerate(head) if ch in "。！？…" and n + size(head[:i + 1]) <= cap]
+        kept = [head[:ends[-1]] if ends else head[:cap - n]]
+    return sep.join(kept + ([last] if last else []))
+
+
 def tidy_closing(text):
     """First line only, without quotes; cut long ones at a sentence break (the prompt asks for <= 40 字)."""
     text = text.strip().strip("“”\"「」")
@@ -424,16 +479,16 @@ def tidy_closing(text):
     return text
 
 
-CARD_TASK = ("【现在】他刚翻开今天的彩虹卡，上面写着「%s」（%s色，话题：%s）。这是今天聊天的开头。"
-             "用你的口吻接住这张卡：一到两句，先用你自己的话轻轻回应它（不要复述卡上的原话），再问一个具体、好回答的小问题。"
-             "可以联系你记得的他的事，但别硬凑。不评价这张卡（不说“来得巧”“正好”“这句话说得好”），不提也不解读卡的颜色，不讲运势、能量、脉轮，不说教。")
+OPENING_TASK = ("【现在】他刚打开和你（%s）的对话，还没说话。你先开口：一到两句，不超过五十个字。"
+                "“你对他的了解”里有他最近跟另一个自己聊的事，或者最近一次聊天，就自然接上（比如“你刚才跟%s说的那件事……”），"
+                "再问一个好回答的小问题；那里什么都没有，就简单打个招呼。不说“我看了记录”，不复述一大段，不提你记得多少。")
 
 
-def build_card(pid, req, card, know=None):
-    """彩虹卡开场: persona + who the user is + what the selves know + task."""
-    color = next((c for c in load_cards()["colors"] if c["key"] == card["c"]), {"name": "", "theme": ""})
-    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, CARD_TASK % (card["t"], color["name"], color["theme"]))
-    return [{"role": "system", "content": system}, {"role": "user", "content": "（我抽到一张彩虹卡：「%s」）" % card["t"]}]
+def build_opening(pid, req, know=None):
+    """开场一句: persona + who the user is + what the selves know (shared) + task."""
+    name, _, other = PERSONAS[pid]
+    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, OPENING_TASK % (name, PERSONAS[other][0]))
+    return [{"role": "system", "content": system}, {"role": "user", "content": "（他打开了和你的对话）"}]
 
 
 # ---------------------------------------------------------------- app state
@@ -451,13 +506,13 @@ class App:
         self.voices = {str(v["id"]): v for v in self.catalog["voices"]}
         self.pool = ThreadPoolExecutor(max_workers=6)       # audio chunks, on the request path
         self.fold_pool = ThreadPoolExecutor(max_workers=2)  # memory folds, in the background
-        self.mem = Memory(os.path.join(CACHE_DIR, "users"),
+        self.mem = Memory(os.path.join(DATA_DIR, "users"),
                           lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0],
                           {pid: p[0] for pid, p in PERSONAS.items()})
         self.lock = threading.Lock()       # rate limits
         self.disk_lock = threading.Lock()  # usage.json and the jsonl logs
         self.hits = {k: defaultdict(deque) for k in ("tts", "chat", "asr", "fb")}
-        for d in (CACHE_DIR, CHAT_LOG_DIR, FEEDBACK_DIR):
+        for d in (CACHE_DIR, LOG_DIR):
             os.makedirs(d, exist_ok=True)
         self.usage_path = os.path.join(CACHE_DIR, "usage.json")
         try:
@@ -500,41 +555,41 @@ class App:
         text, model = complete(msgs, max_tokens, temperature, timeout, tidy)
         return text, model, int((time.time() - t0) * 1000)
 
-    def chat(self, pid, req, ip):
+    def chat(self, pid, req, who):
         uid = req.get("u") if valid_uid(req.get("u")) else None
         users = [clip(h.get("content"), 300) for h in (req.get("history") or [])[-6:] if h.get("role") == "user"]
-        msgs = build_messages(pid, req, self.mem.context(uid, " ".join(users[-3:])) if uid else None)
-        reply, model, ms = self.llm(msgs)
-        reply = postprocess(msgs[-1]["content"], reply)
-        self.log_turn("chat", ip, pid, req, msgs[-1]["content"], reply, model, ms)
+        know = self.mem.context(uid, " ".join(users[-3:]), pid) if uid else None
+        msgs = build_messages(pid, req, know)
+        raw, model, ms = self.llm(msgs, max_tokens=CHAT_MAX_TOKENS, timeout=40)
+        cap = self.mem.reply_cap(uid) if uid else REPLY_MAX
+        fitted = fit(raw, cap)
+        reply = postprocess(msgs[-1]["content"], fitted)
+        tid = self.log("chat", who, pid, req, user=msgs[-1]["content"], reply=reply, raw=raw if fitted != raw else None,
+                       cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, hist=req.get("history"))
         if uid and self.mem.append(uid, pid, [("user", users[-1] if users else msgs[-1]["content"]), ("ai", reply)]) >= 8:
             self.fold_pool.submit(self.fold, uid, 8)
-        return {"reply": reply, "model": model, "ms": ms}
+        return {"reply": reply, "model": model, "ms": ms, "tid": tid}
 
-    def closing(self, pid, req, ip):
+    def closing(self, pid, req, who):
         """One sentence that sums up the session, said when the user taps 结束本次对话."""
         msgs, said = build_closing(pid, req)
         text, model, ms = self.llm(msgs, max_tokens=120, temperature=0.7, tidy=tidy_closing)
         text = postprocess(said, text)
-        self.log_turn("closing", ip, pid, req, said[-300:], text, model, ms)
+        tid = self.log("closing", who, pid, req, user=said, reply=text, model=model, ms=ms, pv=prompt_version(pid))
         if valid_uid(req.get("u")):
             self.mem.append(req["u"], pid, [("closing", text)])
             self.fold_pool.submit(self.fold, req["u"], 2)
-        return {"text": text, "model": model, "ms": ms}
+        return {"text": text, "model": model, "ms": ms, "tid": tid}
 
-    def card(self, pid, req, ip):
-        """Opening line for a 彩虹卡 the user just drew, in the persona's voice and with its memory."""
-        card = next((c for c in load_cards()["cards"] if c["id"] == str(req.get("id", ""))), None)
-        if not card:
-            raise ValueError("unknown card")
+    def opening(self, pid, req, who):
+        """First line when he opens a chat after a while or after talking to the other self: memory is shared, so the
+        self he opens picks up what either of them heard last."""
         uid = req.get("u") if valid_uid(req.get("u")) else None
-        text, model, ms = self.llm(build_card(pid, req, card, self.mem.context(uid, card["t"]) if uid else None),
-                                   max_tokens=160)
-        text = postprocess("", text)
-        self.log_turn("card", ip, pid, req, card["t"], text, model, ms)
-        if uid:
-            self.mem.append(uid, pid, [("card", "（抽到彩虹卡「%s」）" % card["t"]), ("ai", text)])
-        return {"text": text, "model": model, "ms": ms}
+        know = self.mem.context(uid, "", pid) if uid else None
+        text, model, ms = self.llm(build_opening(pid, req, know), max_tokens=120)
+        text = postprocess("", fit(text, 80))
+        tid = self.log("open", who, pid, req, reply=text, model=model, ms=ms, pv=prompt_version(pid), know=know)
+        return {"text": text, "model": model, "ms": ms, "tid": tid}
 
     def fold(self, uid, min_user):
         try:
@@ -543,21 +598,18 @@ class App:
             sys.stderr.write("consolidate %s failed: %s\n" % (uid[:6], e))
             return None
 
-    # -- logs
-    def log_turn(self, kind, ip, pid, req, user, reply, model, ms):
-        self._append(CHAT_LOG_DIR, {"kind": kind, "ip": ip, "p": pid, "nick": clip(req.get("nick"), 12),
-                                    "user": user, "reply": reply, "model": model, "ms": ms})
-
-    def log_feedback(self, rec):
-        """👍/👎 on replies: the upvoted ones feed the next round of distilling (tools/upvoted.py)."""
-        self._append(FEEDBACK_DIR, rec)
-
-    def _append(self, folder, rec):
-        rec = {"t": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
-        path = os.path.join(folder, datetime.date.today().isoformat() + ".jsonl")
+    # -- the archive: everything said, one jsonl per day (read with tools/chatlog.py)
+    def log(self, kind, who, pid, req, **fields):
+        """who = {ip, ua} of the request. Returns the record's id (tid), which the page sends back with 👍/👎."""
+        tid = uuid.uuid4().hex[:12]
+        rec = {"t": datetime.datetime.now().isoformat(timespec="seconds"), "kind": kind, "tid": tid,
+               "u": req.get("u") if valid_uid(req.get("u")) else None, "p": pid, "nick": clip(req.get("nick"), 12) or None,
+               **who, **{k: v for k, v in fields.items() if v not in (None, "")}}
+        path = os.path.join(LOG_DIR, datetime.date.today().isoformat() + ".jsonl")
         with self.disk_lock:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return tid
 
     # -- synthesis with per-chunk disk cache
     def chunk_audio(self, text, voice, speed, rate, emotion):
@@ -639,6 +691,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(429, {"error": "too many requests"})
         return True
 
+    def who(self):
+        return {"ip": self.client_ip(), "ua": clip(self.headers.get("User-Agent"), 200)}
+
     def llm_failed(self, e):
         sys.stderr.write("llm error %s\n" % e)
         return self.send_json(429 if isinstance(e, DailyCap) else 502, {"error": str(e)[:120]})
@@ -668,16 +723,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        handler = {"/api/chat": self.handle_llm, "/api/closing": self.handle_llm, "/api/card": self.handle_llm,
-                   "/api/sync": self.handle_self, "/api/self/forget": self.handle_self,
+        handler = {"/api/chat": self.handle_llm, "/api/closing": self.handle_llm, "/api/open": self.handle_llm,
+                   "/api/sync": self.handle_self, "/api/card": self.handle_self, "/api/self/forget": self.handle_self,
                    "/api/self/wipe": self.handle_self, "/api/self/import": self.handle_self,
-                   "/api/fb": self.handle_fb, "/api/asr": self.handle_asr, "/api/tts": self.handle_tts}.get(path)
+                   "/api/fb": self.handle_fb, "/api/event": self.handle_fb, "/api/asr": self.handle_asr,
+                   "/api/tts": self.handle_tts}.get(path)
         if not handler:
             return self.send_json(404, {"error": "not found"})
         return handler(path)
 
     def handle_llm(self, path):
-        """/api/chat, /api/closing, /api/card: {p, u, nick, ...} -> the persona's words."""
+        """/api/chat, /api/closing, /api/open: {p, u, nick, ...} -> the persona's words."""
         try:
             req = self.read_json(48000)
         except (ValueError, TypeError):
@@ -687,16 +743,18 @@ class Handler(BaseHTTPRequestHandler):
         pid = str(req.get("p", ""))
         if pid not in PERSONAS:
             return self.send_json(400, {"error": "unknown persona"})
-        run = {"/api/chat": APP.chat, "/api/closing": APP.closing, "/api/card": APP.card}[path]
+        run = {"/api/chat": APP.chat, "/api/closing": APP.closing, "/api/open": APP.opening}[path]
         try:
-            return self.send_json(200, run(pid, req, self.client_ip()))
+            return self.send_json(200, run(pid, req, self.who()))
         except ValueError as e:
             return self.send_json(400, {"error": str(e)})
         except LLMError as e:
+            last = next((h.get("content") for h in reversed(req.get("history") or []) if h.get("role") == "user"), None)
+            APP.log("error", self.who(), pid, req, path=path, error=str(e)[:300], user=clip(last, 500))
             return self.llm_failed(e)
 
     def handle_self(self, path):
-        """Long-term memory: /api/sync folds the latest talk in (called when the user leaves a chat);
+        """Long-term memory: /api/sync folds the latest talk in (called when the user leaves a chat); /api/card notes today's card;
         forget / wipe let the user delete what the selves know; import seeds from older local notes."""
         try:
             req = self.read_json(8192)
@@ -710,6 +768,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sync":
             r = APP.fold(uid, 2) or {"add": [], "episode": ""}
             return self.send_json(200, {"memories": r["add"], "episode": r["episode"]})
+        if path == "/api/card":  # today's 彩虹卡 is read aloud on the page, no reply; the selves just remember it
+            card = next((c for c in load_cards()["cards"] if c["id"] == str(req.get("id", ""))), None)
+            pid = str(req.get("p", ""))
+            if not card or pid not in PERSONAS:
+                return self.send_json(400, {"error": "unknown card"})
+            APP.mem.append(uid, pid, [("card", "（抽到今天的彩虹卡「%s」）" % card["t"])])
+            APP.log("card", self.who(), pid, req, card=card["id"], reply=card["t"])
+            return self.send_json(200, {"ok": True})
         if path == "/api/self/forget":
             return self.send_json(200, {"ok": APP.mem.forget(uid, str(req.get("id", "")))})
         if path == "/api/self/wipe":
@@ -719,18 +785,31 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json(200, {"imported": APP.mem.import_notes(uid, notes)})
 
     def handle_fb(self, path):
-        """Body: {p, mid, v: 1|-1|0, reply, user}. Logged for distilling upvoted replies."""
+        """/api/fb {p, u, tid, mid, v: 1|-1|0, reply, user}: 👍/👎 on one reply (ref = the tid of the record it rates).
+        /api/event {p, u, kind, ...}: what the page said or saw without the model, so the archive has whole conversations:
+          local  {why: crisis|fixed|offline|llm-failed|nudge, user, reply}   scripted replies
+          rating {rating: 1-5, note, msgs}                                    the sheet after 结束本次对话"""
         try:
-            req = self.read_json(8192)
-            pid, v = str(req.get("p", "")), int(req.get("v", 0))
+            req = self.read_json(16384)
+            pid = str(req.get("p", ""))
+            if path == "/api/fb":
+                v = int(req.get("v", 0))
+                kind, ok = "fb", v in (-1, 0, 1)
+                fields = {"ref": clip(req.get("tid"), 20), "mid": clip(req.get("mid"), 40), "v": v,
+                          "reply": clip(req.get("reply"), 1000), "user": clip(req.get("user"), 500)}
+            else:
+                kind = str(req.get("kind", ""))
+                ok = kind in ("local", "rating")
+                fields = {"why": clip(req.get("why"), 20), "user": clip(req.get("user"), 1000), "reply": clip(req.get("reply"), 2000),
+                          "rating": int(req.get("rating") or 0) or None, "note": clip(req.get("note"), 500),
+                          "msgs": int(req.get("msgs") or 0) or None}
         except (ValueError, TypeError):
             return self.send_json(400, {"error": "bad request"})
-        if pid not in PERSONAS or v not in (-1, 0, 1):
+        if pid not in PERSONAS or not ok:
             return self.send_json(400, {"error": "bad request"})
         if self.limited("fb"):
             return None
-        APP.log_feedback({"ip": self.client_ip(), "p": pid, "mid": clip(req.get("mid"), 40), "v": v,
-                          "reply": clip(req.get("reply"), 600), "user": clip(req.get("user"), 300)})
+        APP.log(kind, self.who(), pid, req, **fields)
         return self.send_json(200, {"ok": True})
 
     def handle_tts(self, path):
@@ -783,7 +862,10 @@ class Handler(BaseHTTPRequestHandler):
         except TTSError as e:
             sys.stderr.write("asr error %s\n" % e)
             return self.send_json(502, {"error": e.code})
-        return self.send_json(200, {"text": text, "secs": round(secs, 1), "ms": int((time.time() - t0) * 1000)})
+        ms = int((time.time() - t0) * 1000)
+        q = dict(urllib.parse.parse_qsl(self.path.partition("?")[2]))
+        APP.log("asr", self.who(), q.get("p") if q.get("p") in PERSONAS else None, q, user=text, secs=round(secs, 1), ms=ms)
+        return self.send_json(200, {"text": text, "secs": round(secs, 1), "ms": ms})
 
     def send_audio(self, audio, speed, cached, ms):
         self.send_response(200)

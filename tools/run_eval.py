@@ -42,7 +42,7 @@ def main():
         msgs = srv.build_messages(args.persona, req)
         t0 = datetime.datetime.now()
         try:
-            reply, err = srv.postprocess(msgs[-1]["content"], srv.llm_call(args.endpoint, args.model, msgs)), None
+            reply, err = srv.postprocess(msgs[-1]["content"], srv.fit(srv.llm_call(args.endpoint, args.model, msgs, srv.CHAT_MAX_TOKENS, timeout=40))), None
         except srv.LLMError as e:
             reply, err = None, str(e)
         return dict(c, reply=reply, error=err, secs=(datetime.datetime.now() - t0).total_seconds(),
