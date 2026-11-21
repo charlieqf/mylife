@@ -355,12 +355,13 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 <body>
 
 <aside class="desk-note">
-  <h1>MyLife 内测原型 v0.7</h1>
+  <h1>MyLife 内测原型 v0.8</h1>
   <p>用手机浏览器打开，体验最接近真实效果。</p>
   <p>流程：起个称呼 →（选填）资料与性格画像 → 选“理性”或“陪伴” → 聊天。</p>
-  <p>回复由大模型实时生成（模型在后台固定）；服务器不可用时退回预设脚本。八字、紫微、占星为示例文字，正式版由排盘程序计算。资料和记录存在本机浏览器，对话内容会在服务器留存供内测团队查看。</p>
+  <p>回复由大模型实时生成（模型在后台固定）；服务器不可用时退回预设脚本。八字、紫微、占星为示例文字，正式版由排盘程序计算。聊天记录存在本机浏览器；长期记忆和对话内容存在服务器上（对话留存供内测团队查看）。</p>
   <p>语音朗读由服务器调用腾讯云语音合成。每个人格可单独选音色（男女声各 6 个）、调语速（默认每秒 5.6 字）。直接打开本地文件时，退回本机自带的语音合成。对话页可以切到“按住说话”，语音经腾讯云转成文字后发送，不保存录音。</p>
   <p>界面：粉彩天空、平静水面、几何台阶，人物在场景里看着你说话；插画为原创几何风格。跟随系统深色模式切换成黄昏配色。</p>
+  <p>每天第一次进对话会出现一张彩虹卡（49 张原创短句），翻开后“另一个你”接着它开个头；不想抽可以直接说话。</p>
   <p>点“结束本次对话”时，人格先用一句话把这次聊的收住（句式从公开平台的高赞回复里提炼），再请你打分。回复下的赞和踩会记到服务器，用来继续调这句话。</p>
   <p>定位：两个人格都是用户的“另一个自己”，半格是更清醒的你，平坐是更温柔的你。说话方式参考了两种公开的表达风格，不包含任何真人的经历和观点。长期记忆存在服务器上（按设备匿名，不用注册），聊得越久越像你；场景里的人物也会从淡淡的轮廓慢慢变清楚。</p>
   <p>“半格”“平坐”为占位名。</p>
@@ -486,7 +487,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
       <div class="section-t">关于</div>
       <div class="group">
         <div class="item"><div class="grow">它们都是 AI<small>两个都是“另一个你”，由 AI 生成，知道的都是你告诉它们的，不代表任何真实人物。不提供医疗、法律或投资建议。</small></div></div>
-        <div class="item"><div class="grow">版本<small>内测原型 v0.7 · AI 实时回复 · 腾讯云语音朗读与语音输入</small></div></div>
+        <div class="item"><div class="grow">版本<small>内测原型 v0.8 · 另一个你 · 长期记忆 · 彩虹卡</small></div></div>
         <button class="item" id="btn-admin"><div class="grow">管理后台<small>原型演示：对话记录、人格档案、用户画像、热点</small></div></button>
       </div>
       <div style="height:20px"></div>
@@ -1292,7 +1293,7 @@ async function openCard(m,row){
   var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';msgs.appendChild(ty);scrollDown();
   var text=await req;ty.remove();
   if(S.cur===pid)await say(text||c.q,{wait:1});
-  S.busy=false;setSend();
+  S.busy=false;setSend();askVoice();
 }
 // 没翻开的卡：直接开口说话、或点“先不抽”，就收起来，不挡路
 function dropCard(){
@@ -1385,7 +1386,7 @@ async function handle(t){
     if(fixed||!CHAT.ok||!(await replyLLM()))await (pid==='bange'?replyBange(t):replyPingzuo(t));
     if(pid==='pingzuo'&&S.userCount.pingzuo>0&&S.userCount.pingzuo%10===0)await say('说了这么多，我想问一句：这些话，你今天跟身边的人说过吗？我在这儿挺好，但别只在这儿。');
     autoMemo(pid,false);
-  }finally{S.busy=false;setSend()}
+  }finally{S.busy=false;setSend();askVoice()}
 }
 async function talkHot(t){S.busy=true;setSend();push({role:'user',text:'聊聊这个：'+t.title});await say(t[S.cur][1]);S.busy=false;setSend()}
 
@@ -1428,7 +1429,7 @@ async function openChat(id,push_){
 $('#btn-home').addEventListener('click',goHome);
 // 第一次进对话时问一次要不要把回复读出来（选过就记住；之后用右上角喇叭或设置里的开关改）
 function askVoice(){
-  if(S.autoRead!==null||$('#msgs .vchoice'))return;
+  if(S.autoRead!==null||$('#msgs .vchoice')||$('#msgs .row.rainbow.closed'))return;
   var c=document.createElement('div');c.className='card vchoice';
   c.innerHTML='<p>要把'+esc(P[S.cur].name)+'的回复读出来吗？</p><div class="vbtns"><button class="chip on" data-v="1">读出来</button><button class="chip" data-v="0">先不用</button></div><small>以后随时点右上角的喇叭开关</small>';
   c.addEventListener('click',function(e){
