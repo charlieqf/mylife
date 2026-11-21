@@ -207,16 +207,29 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .row.me{align-items:flex-end}
 .row.ai{align-items:flex-start}
 .row.rainbow{align-self:center;align-items:center;margin:6px 0 2px;perspective:600px}
-.rb{width:210px;min-height:118px;border-radius:18px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:16px 18px;box-shadow:0 8px 24px rgba(84,74,140,.12);color:#3B3F5C}
-.rb.back{background:linear-gradient(135deg,#F3B9B2,#F6CCA8 18%,#F3E0A2 34%,#BFDDC4 50%,#B9D4EC 66%,#BBBFE6 82%,#D6BFE4);color:#fff;cursor:pointer}
-.rb.back span{font-size:12px;letter-spacing:.4em;padding-left:.4em}
-.rb.back b{font-size:14px;font-weight:500;margin-top:8px;letter-spacing:.1em;text-shadow:0 1px 3px rgba(80,60,120,.25)}
-.rb.open{background:linear-gradient(160deg,rgba(255,255,255,.6),rgba(255,255,255,.05)),var(--rb)}
-.rb-tag{font-size:11px;letter-spacing:.25em;opacity:.7;margin-bottom:8px}
-.rb.open p{font-size:17px;line-height:1.6;letter-spacing:.04em}
-.rb.flip{animation:rbflip .52s ease}
-@keyframes rbflip{0%{transform:rotateY(0)}50%{transform:rotateY(90deg)}100%{transform:rotateY(0)}}
-.rb-skip{font-size:12px;color:var(--ink-3);margin-top:6px;padding:4px 10px}
+.rbx{position:relative;width:196px;height:122px;perspective:900px;cursor:pointer;outline:none}
+.rbx.turned{cursor:default}
+.row.rainbow.closed .rbx{animation:rbfloat 3.6s ease-in-out infinite}
+.row.rainbow.nudge .rbx{animation:rbnudge .5s ease 2}
+.row.rainbow.gone{opacity:0;transform:scale(.96);transition:opacity .25s,transform .25s}
+@keyframes rbfloat{50%{transform:translateY(-3px)}}
+@keyframes rbnudge{50%{transform:translateY(-6px)}}
+.rbx:focus-visible .back{box-shadow:0 0 0 2px var(--acc)}
+.rb{position:absolute;inset:0;overflow:hidden;border-radius:18px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:16px 18px 14px;
+  background:var(--surface-hi);border:1px solid var(--glass-line);box-shadow:0 6px 20px rgba(84,74,140,.08);color:var(--ink);
+  -webkit-backface-visibility:hidden;backface-visibility:hidden;transition:transform .65s cubic-bezier(.2,.7,.2,1)}
+.rb::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#F3B9B2,#F6CCA8,#F3E0A2,#BFDDC4,#B9D4EC,#BBBFE6,#D6BFE4);opacity:.9}
+.rb.back span{font-size:11px;letter-spacing:.4em;padding-left:.4em;color:var(--ink-3)}
+.rb.back b{font-size:14.5px;font-weight:400;margin-top:8px;letter-spacing:.12em;color:var(--ink-2)}
+.rb.front{transform:rotateY(180deg);background:radial-gradient(120% 90% at 0% 0%,color-mix(in srgb,var(--rb) 55%,transparent),transparent 62%),var(--surface-hi)}
+.rb.front::before{background:var(--rb)}
+.rbx.turned .back{transform:rotateY(-180deg)}
+.rbx.turned .front{transform:rotateY(0)}
+.rb-tag{display:flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.2em;color:var(--ink-3);margin-bottom:8px}
+.rb-tag::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--rb)}
+.rb.front p{font-size:16px;line-height:1.6;letter-spacing:.04em}
+@media (prefers-reduced-motion: reduce){.rb{transition:none}.row.rainbow .rbx{animation:none!important}}
+.rb-skip{font-size:12.5px;color:var(--ink-3);margin-top:8px;padding:6px 12px;border-radius:14px}
 .row.ai:not(.last):not(.show-fb) .fb{display:none}
 .row.closing{align-self:center;align-items:center;text-align:center;max-width:88%;margin:10px 0 4px;padding:16px 22px 16px;border-radius:22px;background:var(--surface);border:1px solid var(--glass-line);transition:border-color .3s}
 .row.closing .seal{font-size:11px;letter-spacing:.3em;line-height:1;padding:4px 5px 4px 8px;border:1px solid var(--acc);color:var(--acc);border-radius:5px;margin-bottom:10px;opacity:.9}
@@ -1096,11 +1109,18 @@ function nodeFor(m){
   else if(m.role==='divider'){row.className='divider';row.textContent=m.text}
   else if(m.role==='rainbow'){
     var c=cardById(m.card);if(!c){row.style.display='none';return row}
-    row.className='row rainbow';
-    if(m.opened){var col=colorOf(c);row.innerHTML='<div class="rb open" style="--rb:'+col.hex+'"><span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p></div>';row.querySelector('p').textContent=c.t}
-    else{row.innerHTML='<button class="rb back" type="button"><span>彩虹卡</span><b>翻开今天这一张</b></button><button class="rb-skip" type="button">先不抽</button>';
-      row.querySelector('.rb').addEventListener('click',function(){openCard(m,row)});
-      row.querySelector('.rb-skip').addEventListener('click',function(){S.logs[S.cur]=S.logs[S.cur].filter(function(x){return x!==m});save();row.remove()})}
+    var col=colorOf(c);row.className='row rainbow'+(m.opened?'':' closed');
+    row.innerHTML='<div class="rbx'+(m.opened?' turned':'')+'"'+(m.opened?'':' role="button" tabindex="0" aria-label="翻开今天的彩虹卡"')+'>'
+      +'<div class="rb face back"><span>彩虹卡</span><b>点一下，翻开</b></div>'
+      +'<div class="rb face front" style="--rb:'+col.hex+'"><span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p></div></div>'
+      +(m.opened?'':'<button class="rb-skip" type="button">先不抽，直接聊</button>');
+    row.querySelector('.front p').textContent=c.t;
+    if(!m.opened){
+      var bx_=row.querySelector('.rbx');
+      bx_.addEventListener('click',function(){openCard(m,row)});
+      bx_.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();openCard(m,row)}});
+      row.querySelector('.rb-skip').addEventListener('click',function(){dropCard()});
+    }
   }
   else if(m.role==='closing'){row.className='row closing';row.innerHTML='<span class="seal">今日</span><p></p>';row.querySelector('p').textContent=m.text}
   else if(m.role==='hot'){
@@ -1256,19 +1276,29 @@ function cardById(id){return CARDS?CARDS.cards.filter(function(c){return c.id===
 function colorOf(c){return CARDS.colors.filter(function(x){return x.key===c.c})[0]||{name:'',theme:'',hex:'#ddd'}}
 function pickCard(){var pool=CARDS.cards.filter(function(c){return S.cardHist.indexOf(c.id)<0});if(!pool.length){S.cardHist=[];pool=CARDS.cards}
   var c=pool[Math.floor(Math.random()*pool.length)];S.cardHist=S.cardHist.concat(c.id).slice(-21);store.set('cardHist',S.cardHist);return c}
-function offerCard(){if(!CARDS)return;push({role:'rainbow',card:pickCard().id,opened:false})}
+function offerCard(){
+  if(!CARDS)return;var open=$('#msgs .row.rainbow.closed');
+  if(open){open.scrollIntoView({behavior:'smooth',block:'center'});open.classList.remove('nudge');void open.offsetWidth;open.classList.add('nudge');return}
+  push({role:'rainbow',card:pickCard().id,opened:false});
+}
 async function openCard(m,row){
-  var c=cardById(m.card);if(!c||S.busy)return;
-  var face=row.querySelector('.rb');face.classList.add('flip');await sleep(260);
-  m.opened=true;save();var col=colorOf(c);
-  face.className='rb open flip';face.style.setProperty('--rb',col.hex);face.innerHTML='<span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p>';face.querySelector('p').textContent=c.t;
+  var c=cardById(m.card);if(!c||m.opened||S.busy)return;
+  m.opened=true;save();row.classList.remove('closed');
+  var bx_=row.querySelector('.rbx');bx_.classList.add('turned');bx_.removeAttribute('role');bx_.removeAttribute('tabindex');
   var sk=row.querySelector('.rb-skip');if(sk)sk.remove();
-  await sleep(500);
   S.busy=true;setSend();var pid=S.cur;
+  var req=postJSON('/api/card',{u:S.uid,p:pid,nick:S.user?S.user.nick:'',id:c.id},20000).then(function(d){return d&&d.text}).catch(function(){return null});
+  await sleep(750);
   var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';msgs.appendChild(ty);scrollDown();
-  var text=null;try{var d=await postJSON('/api/card',{u:S.uid,p:pid,nick:S.user?S.user.nick:'',id:c.id},20000);text=d&&d.text}catch(e){}
-  ty.remove();if(S.cur===pid)await say(text||c.q,{wait:1});
+  var text=await req;ty.remove();
+  if(S.cur===pid)await say(text||c.q,{wait:1});
   S.busy=false;setSend();
+}
+// 没翻开的卡：直接开口说话、或点“先不抽”，就收起来，不挡路
+function dropCard(){
+  var had=S.logs[S.cur].some(function(x){return x.role==='rainbow'&&!x.opened});if(!had)return;
+  S.logs[S.cur]=S.logs[S.cur].filter(function(x){return !(x.role==='rainbow'&&!x.opened)});save();
+  $$('#msgs .row.rainbow.closed').forEach(function(r){r.classList.add('gone');setTimeout(function(){r.remove()},280)});
 }
 /* 长期记忆在服务器上，按这台设备的匿名 id 存（不用注册）。两个“你”越聊越了解你：成形度 0–5 决定场景里的人物有多清楚 */
 S.uid=store.get('uid',null);
@@ -1347,7 +1377,7 @@ function autoMemo(pid,leaving){
   }).catch(function(){return null}).then(function(r){memoBusy[pid]=false;return r});
 }
 async function handle(t){
-  S.busy=true;setSend();
+  dropCard();S.busy=true;setSend();
   push({role:'user',text:t});S.userCount[S.cur]++;
   try{
     if(R.crisis.test(t)){await say(SAFE,{role:'safety',wait:600});return}
