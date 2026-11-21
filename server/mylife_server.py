@@ -377,6 +377,22 @@ def build_closing(pid, req):
     return [{"role": "system", "content": system}, {"role": "user", "content": user}], "\n".join(said)
 
 
+SEP = chr(10) * 2
+CARDS_PATH = os.environ.get("MYLIFE_CARDS", os.path.join(HERE, "prompts", "rainbow-cards.json"))
+CARD_TASK = ("【现在】他刚翻开今天的彩虹卡，上面写着「%s」（%s色，话题：%s）。这是今天聊天的开头。"
+             "用你的口吻接住这张卡：一到两句，先用你自己的话轻轻回应它（不要复述卡上的原话），再问一个具体、好回答的小问题。"
+             "可以联系你记得的他的事，但别硬凑。不评价这张卡（不说“来得巧”“正好”“这句话说得好”），不解读颜色，不讲运势、能量、脉轮，不说教。")
+
+
+def load_cards():
+    try:
+        with open(CARDS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return {"colors": data["colors"], "cards": data["cards"]}
+    except (OSError, ValueError, KeyError):
+        return {"colors": [], "cards": []}
+
+
 def tidy_closing(text):
     text = text.strip().strip("“”\"「」")
     text = text.splitlines()[0].strip() if text else ""
@@ -543,6 +559,36 @@ class App:
                        "nick": clip(req.get("nick"), 12), "user": said[-300:], "reply": text, "model": used[1], "ms": ms})
         return text, used[1], ms
 
+    def card_opening(self, pid, req, ip):
+        """Opening line for today's 彩虹卡 (the icebreaker), in the persona's voice and with its memory."""
+        cards = load_cards()
+        card = next((c for c in cards["cards"] if c["id"] == str(req.get("id", ""))), None)
+        if not card:
+            raise ValueError("unknown card")
+        color = next((c for c in cards["colors"] if c["key"] == card["c"]), {"name": "", "theme": ""})
+        uid = req.get("u") if valid_uid(req.get("u")) else None
+        if not self._bump("chat_calls", 1, CHAT_DAILY):
+            raise LLMError("DailyCap")
+        parts = [persona_prompt(pid), "用户的称呼：%s" % (clip(req.get("nick"), 12) or "朋友")]
+        if uid:
+            parts.append(self.mem.context(uid, card["t"]))
+        if not uid or "一共说过 0 句话" in parts[-1]:
+            parts.append("（你们刚认识，你还不知道他的任何事：不要提“上次”“上周”“那件事”这类往事。）")
+        parts += [CARD_TASK % (card["t"], color["name"], color["theme"]), OUTPUT_RULE]
+        msgs = [{"role": "system", "content": SEP.join(parts)},
+                {"role": "user", "content": "（我抽到一张彩虹卡：「%s」）" % card["t"]}]
+        t0 = time.time()
+        try:
+            text = llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs, max_tokens=160, temperature=0.8)
+        except LLMError:
+            text = llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs, max_tokens=160, temperature=0.8)
+        text = postprocess(pid, "", text) or card["q"]
+        if uid:
+            self.mem.append(uid, pid, [("card", "（抽到彩虹卡「%s」）" % card["t"]), ("ai", text)])
+        self.log_chat({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": ip, "p": pid, "kind": "card",
+                       "user": card["t"], "reply": text, "model": CHAT_PRIMARY[1], "ms": int((time.time() - t0) * 1000)})
+        return text
+
     def log_chat(self, rec):
         self._append(CHAT_LOG_DIR, rec)
 
@@ -629,6 +675,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"ok": True})
         if path == "/api/voices":
             return self.send_json(200, APP.public_voices())
+        if path == "/api/cards":
+            return self.send_json(200, load_cards())
         if path == "/api/self":
             uid = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("u", "")
             if not valid_uid(uid):
@@ -652,7 +700,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        if path in ("/api/chat", "/api/memo", "/api/closing"):
+        if path in ("/api/chat", "/api/memo", "/api/closing", "/api/card"):
             return self.handle_chat(path)
         if path == "/api/fb":
             return self.handle_fb()
@@ -706,6 +754,8 @@ class Handler(BaseHTTPRequestHandler):
             pid = str(req.get("p", ""))
             if pid not in PERSONAS:
                 return self.send_json(400, {"error": "unknown persona"})
+            if path == "/api/card":
+                return self.send_json(200, {"text": APP.card_opening(pid, req, self.client_ip())})
             if path == "/api/closing":
                 text, model, ms = APP.closing(pid, req, self.client_ip())
                 return self.send_json(200, {"text": text, "model": model, "ms": ms})

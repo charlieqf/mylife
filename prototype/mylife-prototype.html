@@ -191,7 +191,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 /* 对话 */
 #s-chat{--head:calc(56px + var(--safe-t));--acc:var(--b);--me:var(--me-b)}
 #s-chat .stage-gap{flex:1 1 auto;height:auto;min-height:40px}
-#s-chat .panel{flex:0 1 auto;max-height:50%;margin:0 12px calc(12px + var(--safe-b));border-radius:26px;border:1px solid var(--glass-line);background:var(--card);box-shadow:var(--shadow)}
+#s-chat .panel{flex:0 1 auto;max-height:44%;margin:0 12px calc(12px + var(--safe-b));border-radius:26px;border:1px solid var(--glass-line);background:var(--card);box-shadow:var(--shadow)}
 #s-chat #chat-scroll{flex:1 1 auto;min-height:0}
 #s-chat .composer{padding-bottom:12px}
 #s-chat .suggest,#s-chat .composer{flex:none}
@@ -206,6 +206,18 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .row{display:flex;flex-direction:column;max-width:100%}
 .row.me{align-items:flex-end}
 .row.ai{align-items:flex-start}
+.row.rainbow{align-self:center;align-items:center;margin:6px 0 2px;perspective:600px}
+.rb{width:210px;min-height:118px;border-radius:18px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:16px 18px;box-shadow:0 8px 24px rgba(84,74,140,.12);color:#3B3F5C}
+.rb.back{background:linear-gradient(135deg,#F3B9B2,#F6CCA8 18%,#F3E0A2 34%,#BFDDC4 50%,#B9D4EC 66%,#BBBFE6 82%,#D6BFE4);color:#fff;cursor:pointer}
+.rb.back span{font-size:12px;letter-spacing:.4em;padding-left:.4em}
+.rb.back b{font-size:14px;font-weight:500;margin-top:8px;letter-spacing:.1em;text-shadow:0 1px 3px rgba(80,60,120,.25)}
+.rb.open{background:linear-gradient(160deg,rgba(255,255,255,.6),rgba(255,255,255,.05)),var(--rb)}
+.rb-tag{font-size:11px;letter-spacing:.25em;opacity:.7;margin-bottom:8px}
+.rb.open p{font-size:17px;line-height:1.6;letter-spacing:.04em}
+.rb.flip{animation:rbflip .52s ease}
+@keyframes rbflip{0%{transform:rotateY(0)}50%{transform:rotateY(90deg)}100%{transform:rotateY(0)}}
+.rb-skip{font-size:12px;color:var(--ink-3);margin-top:6px;padding:4px 10px}
+.row.ai:not(.last):not(.show-fb) .fb{display:none}
 .row.closing{align-self:center;align-items:center;text-align:center;max-width:88%;margin:10px 0 4px;padding:16px 22px 16px;border-radius:22px;background:var(--surface);border:1px solid var(--glass-line);transition:border-color .3s}
 .row.closing .seal{font-size:11px;letter-spacing:.3em;line-height:1;padding:4px 5px 4px 8px;border:1px solid var(--acc);color:var(--acc);border-radius:5px;margin-bottom:10px;opacity:.9}
 .row.closing p{font-size:16.5px;line-height:1.75;letter-spacing:.03em;white-space:pre-wrap}
@@ -610,16 +622,16 @@ function sceneSVG(pid,o){
     s+=refl(40,H+1,40,5)+bx(40,247,40,3,8,'f')+bx(52,241,14,6,6,'f')
       +refl(268,H+1,62,8)+bx(268,248,62,2,8,'f')+archDoor(292,216,22,32,6,'f')
       +bx(160,292,320,400,16,'m')+bx(222,322,280,400,16,'m')+bx(270,352,240,400,16,'m')
-      +'<ellipse cx="172" cy="289.4" rx="9" ry="1.5" fill="#5A4E8A" opacity=".10"/>'
+      +'<ellipse cx="172" cy="289.6" rx="7" ry="1.2" fill="#5A4E8A" opacity=".10"/>'
       // 留给你的那盒草莓牛奶
-      +'<g>'+bx(187,284.6,4.2,5.4,3,'k')+'<path d="M188.5 284.6v-1.8l1-.9h1.5l-.9.9h-1.6z" fill="var(--kt)"/><path d="M190.3 282.7l.8-3" stroke="#FFFFFF" stroke-width=".6" stroke-linecap="round"/></g>'
-      +'<g transform="translate(172 292) scale(.56)">'+figure('pingzuo')+'</g>';
+      +'<g>'+bx(182,286.4,3.2,4.2,2.4,'k')+'<path d="M183.2 286.4v-1.4l.8-.7h1.1l-.7.7h-1.2z" fill="var(--kt)"/><path d="M184.5 285l.6-2.4" stroke="#FFFFFF" stroke-width=".5" stroke-linecap="round"/></g>'
+      +'<g transform="translate(172 292) scale(.42)">'+figure('pingzuo')+'</g>';
   }else if(pid==='bange'){
     s+=refl(38,H+1,30,6)+bx(38,248,30,2,6,'f')+bx(48,214,10,34,5,'f')+bx(47,211,12,3,5,'f')+'<rect x="51.5" y="221" width="3" height="5" rx="1.5" fill="var(--haze)"/>'
       +refl(272,H+1,50,8)+bx(272,246,50,4,8,'f')+bx(284,239,20,7,6,'f')+bx(290,233,8,6,5,'f')
       +bx(112,316,38,400,16,'m')+bx(150,300,44,400,16,'m')+bx(194,293,300,400,16,'m')+bx(240,326,260,400,16,'m')+bx(286,358,220,400,16,'m')
-      +'<ellipse cx="214" cy="289.6" rx="8" ry="1.4" fill="#4A4E8A" opacity=".12"/>'
-      +'<g transform="translate(214 290) scale(.56)">'+figure('bange')+'</g>';
+      +'<ellipse cx="214" cy="289.6" rx="6" ry="1.1" fill="#4A4E8A" opacity=".12"/>'
+      +'<g transform="translate(214 290) scale(.42)">'+figure('bange')+'</g>';
   }else{
     s+=refl(30,H+1,44,7)+bx(30,201,44,4,10,'f')+bx(42,193,18,8,8,'f')
       +refl(286,H+1,50,8)+bx(286,201,50,4,10,'f')+bx(300,189,16,12,8,'f')
@@ -1053,8 +1065,8 @@ function goHome(){
   var box=$('#home-cards');box.innerHTML='';
   ['bange','pingzuo'].forEach(function(id){
     var p=P[id],c=document.createElement('button');c.className='pcard '+p.cls;
-    var lt=lastText(id),fresh=S.hotShown[id]!==today()&&pickHot();
-    c.innerHTML=(fresh?'<span class="dot tag '+p.tg+'">今日新话题</span>':'')+'<div class="thumb">'+sceneSVG(id,{vb:THUMB_VB[id],par:'xMidYMid slice'})+'</div><div class="top"><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+'</div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
+    var lt=lastText(id),fresh=CHAT.ok&&S.cardDay!==today();
+    c.innerHTML=(fresh?'<span class="dot tag '+p.tg+'">今天的彩虹卡</span>':'')+'<div class="thumb">'+sceneSVG(id,{vb:THUMB_VB[id],par:'xMidYMid slice'})+'</div><div class="top"><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+'</div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
     c.addEventListener('click',function(){openChat(id,true)});
     box.appendChild(c);
   });
@@ -1082,6 +1094,14 @@ function nodeFor(m){
       hb.addEventListener('click',function(){openChat(m.handoff,true)});row.appendChild(hb)}
   }
   else if(m.role==='divider'){row.className='divider';row.textContent=m.text}
+  else if(m.role==='rainbow'){
+    var c=cardById(m.card);if(!c){row.style.display='none';return row}
+    row.className='row rainbow';
+    if(m.opened){var col=colorOf(c);row.innerHTML='<div class="rb open" style="--rb:'+col.hex+'"><span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p></div>';row.querySelector('p').textContent=c.t}
+    else{row.innerHTML='<button class="rb back" type="button"><span>彩虹卡</span><b>翻开今天这一张</b></button><button class="rb-skip" type="button">先不抽</button>';
+      row.querySelector('.rb').addEventListener('click',function(){openCard(m,row)});
+      row.querySelector('.rb-skip').addEventListener('click',function(){S.logs[S.cur]=S.logs[S.cur].filter(function(x){return x!==m});save();row.remove()})}
+  }
   else if(m.role==='closing'){row.className='row closing';row.innerHTML='<span class="seal">今日</span><p></p>';row.querySelector('p').textContent=m.text}
   else if(m.role==='hot'){
     var t=TOPICS.filter(function(x){return x.id===m.topic})[0]||TOPICS[0];
@@ -1099,6 +1119,7 @@ function sendFb(pid,m){
 }
 function paintFb(row,v){row.querySelectorAll('[data-fb]').forEach(function(b){b.classList.toggle('on',+b.dataset.fb===v)})}
 msgs.addEventListener('click',function(e){
+  var bub=e.target.closest('.row.ai:not(.last) .bubble');if(bub){bub.parentNode.classList.toggle('show-fb');return}
   var sp=e.target.closest('[data-speak]');
   if(sp){var r=sp.closest('.row'),mm=S.logs[S.cur].filter(function(x){return x.id===r.dataset.id})[0];if(!mm)return;
     if(sp.classList.contains('on')){stopSpeak();return}speak(mm.text,S.cur,mm.id);return}
@@ -1111,8 +1132,10 @@ msgs.addEventListener('click',function(e){
 new MutationObserver(function(){
   var st=$('#stage');st.classList.toggle('thinking',!!msgs.querySelector('.typing'));st.classList.toggle('speaking',!!msgs.querySelector('.row.speaking'));
 }).observe(msgs,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
-function renderAll(){msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});scrollDown()}
-function push(m){m.id=m.id||uid();m.t=Date.now();S.logs[S.cur].push(m);save();var n=nodeFor(m);msgs.appendChild(n);scrollDown();return n}
+function markLast(){var r=msgs.querySelectorAll('.row.ai[data-id]');r.forEach(function(x,i){x.classList.toggle('last',i===r.length-1)})}
+function paintSuggest(){$('#suggest').style.display=sessionMsgs(S.cur).some(function(m){return m.role==='user'})?'none':''}
+function renderAll(){msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});markLast();paintSuggest();scrollDown()}
+function push(m){m.id=m.id||uid();m.t=Date.now();S.logs[S.cur].push(m);save();var n=nodeFor(m);msgs.appendChild(n);if(m.role==='ai')markLast();if(m.role==='user')paintSuggest();scrollDown();return n}
 function typeInto(el,text,done,sp){var i=0;var tm=setInterval(function(){i+=2;el.textContent=text.slice(0,i);scrollDown();if(i>=text.length){clearInterval(tm);done&&done()}},sp||28)}
 async function say(text,opts){
   opts=opts||{};var who=S.cur;
@@ -1225,6 +1248,28 @@ async function replyPingzuo(t){
 }
 /* ================= 真实对话：服务器调用大模型（模型后台固定）；失败时退回预设脚本 ================= */
 var CHAT={ok:/^https?:$/.test(location.protocol)&&!!window.fetch};
+/* 彩虹卡（破冰）：49 张原创短句，七种颜色只代表话题。卡面在服务器 prompts/rainbow-cards.json */
+var CARDS=null,cardsP=CHAT.ok?fetch('/api/cards').then(function(r){return r.ok?r.json():null}).then(function(d){if(d&&d.cards&&d.cards.length)CARDS=d;return CARDS}).catch(function(){return null}):Promise.resolve(null);
+S.cardDay=store.get('cardDay','');S.cardHist=store.get('cardHist',[]);
+cardsP.then(function(){if(CARDS&&!S.busy&&$('#s-chat').classList.contains('on'))renderAll()});
+function cardById(id){return CARDS?CARDS.cards.filter(function(c){return c.id===id})[0]:null}
+function colorOf(c){return CARDS.colors.filter(function(x){return x.key===c.c})[0]||{name:'',theme:'',hex:'#ddd'}}
+function pickCard(){var pool=CARDS.cards.filter(function(c){return S.cardHist.indexOf(c.id)<0});if(!pool.length){S.cardHist=[];pool=CARDS.cards}
+  var c=pool[Math.floor(Math.random()*pool.length)];S.cardHist=S.cardHist.concat(c.id).slice(-21);store.set('cardHist',S.cardHist);return c}
+function offerCard(){if(!CARDS)return;push({role:'rainbow',card:pickCard().id,opened:false})}
+async function openCard(m,row){
+  var c=cardById(m.card);if(!c||S.busy)return;
+  var face=row.querySelector('.rb');face.classList.add('flip');await sleep(260);
+  m.opened=true;save();var col=colorOf(c);
+  face.className='rb open flip';face.style.setProperty('--rb',col.hex);face.innerHTML='<span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p>';face.querySelector('p').textContent=c.t;
+  var sk=row.querySelector('.rb-skip');if(sk)sk.remove();
+  await sleep(500);
+  S.busy=true;setSend();var pid=S.cur;
+  var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';msgs.appendChild(ty);scrollDown();
+  var text=null;try{var d=await postJSON('/api/card',{u:S.uid,p:pid,nick:S.user?S.user.nick:'',id:c.id},20000);text=d&&d.text}catch(e){}
+  ty.remove();if(S.cur===pid)await say(text||c.q,{wait:1});
+  S.busy=false;setSend();
+}
 /* 长期记忆在服务器上，按这台设备的匿名 id 存（不用注册）。两个“你”越聊越了解你：成形度 0–5 决定场景里的人物有多清楚 */
 S.uid=store.get('uid',null);
 if(!S.uid){var rb=new Uint8Array(16);(window.crypto||{getRandomValues:function(a){for(var i=0;i<a.length;i++)a[i]=Math.random()*256|0;return a}}).getRandomValues(rb);
@@ -1256,7 +1301,9 @@ function chatContext(){
   return {nick:S.user?S.user.nick:'',profile:lines.join('\n'),notme:neg.join('、'),memories:S.memories.slice(0,8).map(function(m){return m.text})};
 }
 function chatHistory(pid,n){
-  return S.logs[pid].filter(function(m){return m.role==='user'||m.role==='ai'}).slice(-(n||16)).map(function(m){return {role:m.role==='user'?'user':'assistant',content:String(m.text).slice(0,500)}});
+  return S.logs[pid].filter(function(m){return m.role==='user'||m.role==='ai'||(m.role==='rainbow'&&m.opened&&cardById(m.card))}).slice(-(n||16)).map(function(m){
+    if(m.role==='rainbow')return {role:'user',content:'（我抽到一张彩虹卡：「'+cardById(m.card).t+'」）'};
+    return {role:m.role==='user'?'user':'assistant',content:String(m.text).slice(0,500)}});
 }
 function postJSON(url,body,ms){
   var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},ms||30000):0;
@@ -1344,7 +1391,8 @@ async function openChat(id,push_){
   S.busy=true;setSend();
   if(!S.logs[id].filter(function(m){return m.role==='ai'}).length)await say(greeting(id),{wait:500});
   else if(S.callback[id]){await say((id==='bange'?'上次你聊到：':'上次你说起')+S.callback[id]+(id==='bange'?' 后来怎么样了？':' 后来还好吗？'),{wait:600});S.callback[id]=null;store.set('callback',S.callback)}
-  if(S.hotShown[id]!==today()){var t=pickHot();if(t&&S.cur===id){await sleep(400);push({role:'hot',topic:t.id});await say(t[id][0],{wait:700});S.hotShown[id]=today();store.set('hotShown',S.hotShown)}}
+  await cardsP;
+  if(CARDS&&S.cardDay!==today()&&S.cur===id){await sleep(400);S.cardDay=today();store.set('cardDay',S.cardDay);offerCard()}
   S.busy=false;setSend();askVoice();
 }
 $('#btn-home').addEventListener('click',goHome);
@@ -1496,12 +1544,14 @@ mask.addEventListener('click',closeSheets);
 $('#btn-menu').addEventListener('click',function(){
   var o=P[other(S.cur)];
   var vc=S.voice[S.cur];
-  $('#menu-items').innerHTML='<button class="menu-item" data-go="switch">换成'+o.name+'聊<small>'+o.kind+'</small></button><button class="menu-item" data-go="voice">'+P[S.cur].name+'的声音<small>'+esc(voiceLabel(S.cur))+' · '+vc.cps.toFixed(1)+' 字/秒</small></button><button class="menu-item" data-go="portrait">我的性格画像</button><button class="menu-item" data-go="mem">它们记得的事</button><button class="menu-item" data-go="end">结束本次对话</button><button class="menu-item" data-go="set">设置</button>';
+  $('#menu-items').innerHTML='<button class="menu-item" data-go="switch">换成'+o.name+'聊<small>'+o.kind+'</small></button><button class="menu-item" data-go="voice">'+P[S.cur].name+'的声音<small>'+esc(voiceLabel(S.cur))+' · '+vc.cps.toFixed(1)+' 字/秒</small></button><button class="menu-item" data-go="portrait">我的性格画像</button><button class="menu-item" data-go="mem">它们对你的了解</button>'+(CARDS?'<button class="menu-item" data-go="card">抽一张彩虹卡</button>':'')+'<button class="menu-item" data-go="hot">聊聊今天的热点</button><button class="menu-item" data-go="end">结束本次对话</button><button class="menu-item" data-go="set">设置</button>';
   openSheet('#sh-menu');
 });
 $('#menu-items').addEventListener('click',function(e){
   var b=e.target.closest('[data-go]');if(!b)return;var g=b.dataset.go;
   if(g==='end'){closeSheets();endTalk();return}
+  if(g==='card'){closeSheets();if(!S.busy)offerCard();return}
+  if(g==='hot'){closeSheets();if(!S.busy){var ht=pickHot();if(ht){push({role:'hot',topic:ht.id});say(ht[S.cur][0],{wait:700})}else toast('今天没有热点')}return}
   if(g==='voice'){openVoiceSheet(S.cur);return}
   closeSheets();
   if(g==='switch'){if(!S.busy)openChat(other(S.cur),true);return}

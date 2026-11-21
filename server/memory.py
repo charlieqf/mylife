@@ -168,7 +168,7 @@ class Memory:
             names = {"bange": "半格", "pingzuo": "平坐"}
             convo = []
             for r in new[-60:]:
-                who = "他" if r.get("role") == "user" else names.get(r.get("p"), "AI")
+                who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or names.get(r.get("p"), "AI")
                 convo.append("%s：%s" % (who, str(r.get("text", ""))[:300]))
             known = ["【他是怎样的人】", prof["portrait"] or "（还不了解）", "【已经记住的事】"]
             known += ["%s｜%s" % (x["id"], x["text"]) for x in prof["notes"][:60]] or ["（还没有）"]

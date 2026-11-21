@@ -27,7 +27,7 @@ scp "${SCP_OPTS[@]}" server/mylife_server.py server/memory.py server/voices.json
   prototype/mylife-prototype.html deploy/nginx-mylife.conf deploy/mylife.service "$HOST:$STAGE/"
 
 # Persona prompts (档案 + 风格示例), the 去AI味 style block and the 收尾一句 block, read on every call.
-CONTENT=$(ls personas/*/人格档案.md personas/*/风格示例.md prompts/de-ai-style.txt prompts/closing-style.txt prompts/self-frame.txt 2>/dev/null || true)
+CONTENT=$(ls personas/*/人格档案.md personas/*/风格示例.md prompts/de-ai-style.txt prompts/closing-style.txt prompts/self-frame.txt prompts/rainbow-cards.json 2>/dev/null || true)
 tar -czf - $CONTENT | ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $STAGE/content && tar -xzf - -C $STAGE/content"
 
 if [ "${1:-}" = "--secrets" ]; then
