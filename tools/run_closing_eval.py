@@ -9,23 +9,11 @@
 import argparse
 import datetime
 import os
-import sys
 from concurrent.futures import ThreadPoolExecutor
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(ROOT, ".secrets", "mylife.env"), encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k, v)
-os.environ["MYLIFE_PERSONAS"] = os.path.join(ROOT, "personas")
-os.environ["MYLIFE_STYLE"] = os.path.join(ROOT, "prompts", "de-ai-style.txt")
-os.environ["MYLIFE_SELF_FRAME"] = os.path.join(ROOT, "prompts", "self-frame.txt")
-os.environ["MYLIFE_CLOSING_STYLE"] = os.path.join(ROOT, "prompts", "closing-style.txt")
-os.environ.setdefault("MYLIFE_CACHE", os.path.join(ROOT, ".eval-cache"))
-sys.path.insert(0, os.path.join(ROOT, "server"))
-import mylife_server as srv  # noqa: E402
+from _boot import ROOT, server
+
+srv = server()
 
 # 每段只给用户说的话；人格的回复现场生成。
 SESSIONS = {
@@ -48,11 +36,10 @@ def run(pid, cid):
         for u in said:
             hist.append({"role": "user", "content": u})
             msgs = srv.build_messages(pid, {"nick": "小林", "history": hist})
-            reply = srv.postprocess(pid, u, srv.llm_call(srv.CHAT_PRIMARY[0], srv.CHAT_PRIMARY[1], msgs))
+            reply = srv.postprocess(u, srv.complete(msgs)[0])
             hist.append({"role": "assistant", "content": reply})
         msgs, all_said = srv.build_closing(pid, {"nick": "小林", "history": hist})
-        line = srv.tidy_closing(srv.llm_call(srv.CHAT_PRIMARY[0], srv.CHAT_PRIMARY[1], msgs, max_tokens=120, temperature=0.7))
-        line = srv.postprocess(pid, all_said, line)
+        line = srv.postprocess(all_said, srv.complete(msgs, 120, 0.7, tidy=srv.tidy_closing)[0])
         err = None
     except (srv.LLMError, ValueError) as e:
         line, err = None, str(e)
@@ -60,8 +47,6 @@ def run(pid, cid):
 
 
 def main():
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--persona", choices=["bange", "pingzuo", "both"], default="both")
     ap.add_argument("--only", default="")

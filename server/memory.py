@@ -1,16 +1,18 @@
 """Long-term memory: each user's "other selves" get to know them a little more after every talk.
 
 Per anonymous user id (random, made in the browser, kept in localStorage; no account):
-  /var/cache/mylife/users/<uid>/log.jsonl     every line said (user, persona replies, closing lines)
+  /var/cache/mylife/users/<uid>/log.jsonl     every line said (user, persona replies, cards, closing lines)
   /var/cache/mylife/users/<uid>/self.json     what the two selves know about the user:
       since      first day
       msgs       how many things the user has said in total
-      upto       how many log lines have been folded into the profile
+      folded     how many of those are already folded into the profile (msgs - folded = pending)
+      upto       how many log lines have been folded
       portrait   "你是怎样的人" (<=220 字, second person), rewritten as they learn more
       notes      facts worth remembering ("你……", <=30 字 each, newest first, max 80)
       episodes   one line per talk, max 300
-Folding new lines in ("consolidate") is one LLM call that returns JSON. It runs in the background
-after every 8 new user lines, and synchronously from /api/sync when the user leaves a chat.
+Folding new lines in ("consolidate") is one LLM call that returns JSON. The server runs it in the
+background after every 8 new user lines and after a closing line, and /api/sync runs it when the user
+leaves a chat.
 """
 import datetime
 import json
@@ -23,6 +25,7 @@ import threading
 UID_RE = re.compile(r"^[A-Za-z0-9_-]{16,48}$")
 NOTE_CAP, EPISODE_CAP = 80, 300
 LEVELS = (3, 8, 16, 28, 45)  # score thresholds for how "formed" the other selves look (0..5)
+NEW_USER_LINE = "（你们刚认识，你还不知道他的任何事：不要提“上次”“上周”“那件事”这类往事。）"
 
 CONSOLIDATE_PROMPT = """你在帮一个人的“另一个自己”整理记忆。下面有三部分：已经知道的他（画像和记住的事），以及这次新的聊天记录。
 读完这次的聊天，输出一个 JSON 对象（只输出 JSON，不要别的字）：
@@ -41,6 +44,13 @@ def valid_uid(uid):
     return isinstance(uid, str) and bool(UID_RE.match(uid))
 
 
+def write_json_atomic(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 def _today():
     return datetime.date.today().isoformat()
 
@@ -50,11 +60,16 @@ def _bigrams(s):
     return {s[i:i + 2] for i in range(len(s) - 1)}
 
 
+def _empty_profile():
+    return {"since": _today(), "msgs": 0, "folded": 0, "upto": 0, "portrait": "", "notes": [], "episodes": []}
+
+
 class Memory:
-    def __init__(self, root, llm):
-        """llm(messages, max_tokens, temperature) -> str (raises on failure)."""
+    def __init__(self, root, llm, names):
+        """llm(messages, max_tokens, temperature) -> str (raises on failure); names: persona id -> 名字."""
         self.root = root
         self.llm = llm
+        self.names = names
         os.makedirs(root, exist_ok=True)
         self.locks = {}
         self.busy = set()
@@ -71,60 +86,52 @@ class Memory:
             return self.locks.setdefault(uid, threading.Lock())
 
     def _load(self, uid):
+        prof = _empty_profile()
         try:
             with open(os.path.join(self._dir(uid), "self.json"), encoding="utf-8") as f:
-                prof = json.load(f)
+                saved = json.load(f)
         except (OSError, ValueError):
-            prof = {}
-        prof.setdefault("since", _today())
-        prof.setdefault("msgs", 0)
-        prof.setdefault("upto", 0)
-        prof.setdefault("logn", 0)
-        prof.setdefault("portrait", "")
-        prof.setdefault("notes", [])
-        prof.setdefault("episodes", [])
+            return prof
+        if "folded" not in saved:  # profiles written before the counter existed
+            new, _ = self._read_log(uid, saved.get("upto", 0))
+            saved["folded"] = saved.get("msgs", 0) - sum(1 for r in new if r.get("role") == "user")
+        prof.update(saved)
         return prof
 
     def _save(self, uid, prof):
-        d = self._dir(uid)
-        os.makedirs(d, exist_ok=True)
-        tmp = os.path.join(d, "self.json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(prof, f, ensure_ascii=False)
-        os.replace(tmp, os.path.join(d, "self.json"))
+        os.makedirs(self._dir(uid), exist_ok=True)
+        write_json_atomic(os.path.join(self._dir(uid), "self.json"), prof)
 
     def _read_log(self, uid, start):
+        """Records from line `start` on, and how many raw lines that was (bad lines still count)."""
         try:
             with open(os.path.join(self._dir(uid), "log.jsonl"), encoding="utf-8") as f:
-                lines = f.readlines()
+                lines = f.readlines()[start:]
         except OSError:
-            return []
+            return [], 0
         out = []
-        for ln in lines[start:]:
+        for ln in lines:
             try:
                 out.append(json.loads(ln))
             except ValueError:
                 pass
-        return out
+        return out, len(lines)
 
     # ---------------------------------------------------------------- writing
     def append(self, uid, pid, recs):
-        """recs: [(role, text)], role in user / ai / closing. Returns unconsolidated user lines."""
+        """recs: [(role, text)], role in user / ai / card / closing. Returns how many user lines wait to be folded."""
         now = datetime.datetime.now().isoformat(timespec="seconds")
         with self._lock(uid):
             prof = self._load(uid)
-            d = self._dir(uid)
-            os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, "log.jsonl"), "a", encoding="utf-8") as f:
+            os.makedirs(self._dir(uid), exist_ok=True)
+            with open(os.path.join(self._dir(uid), "log.jsonl"), "a", encoding="utf-8") as f:
                 for role, text in recs:
                     if text:
                         f.write(json.dumps({"t": now, "p": pid, "role": role, "text": text}, ensure_ascii=False) + "\n")
-                        prof["logn"] += 1
                         if role == "user":
                             prof["msgs"] += 1
             self._save(uid, prof)
-            pending = [r for r in self._read_log(uid, prof["upto"]) if r.get("role") == "user"]
-        return len(pending)
+        return prof["msgs"] - prof["folded"]
 
     def import_notes(self, uid, notes):
         """Seed from the notes an older version of the page kept in localStorage (only when empty)."""
@@ -132,10 +139,8 @@ class Memory:
             prof = self._load(uid)
             if prof["notes"]:
                 return 0
-            for t in notes[:30]:
-                t = str(t).strip()[:40]
-                if t:
-                    prof["notes"].append({"id": secrets.token_hex(4), "text": t, "d": _today()})
+            prof["notes"] = [{"id": secrets.token_hex(4), "text": str(t).strip()[:40], "d": _today()}
+                             for t in notes[:30] if str(t).strip()]
             self._save(uid, prof)
             return len(prof["notes"])
 
@@ -161,14 +166,13 @@ class Memory:
         try:
             with self._lock(uid):
                 prof = self._load(uid)
-                new = self._read_log(uid, prof["upto"])
-                end = prof["upto"] + len(new)
-            if sum(1 for r in new if r.get("role") == "user") < min_user:
-                return None
-            names = {"bange": "半格", "pingzuo": "平坐"}
+                if prof["msgs"] - prof["folded"] < min_user:
+                    return None
+                new, nlines = self._read_log(uid, prof["upto"])
+            n_user = sum(1 for r in new if r.get("role") == "user")
             convo = []
             for r in new[-60:]:
-                who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or names.get(r.get("p"), "AI")
+                who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or self.names.get(r.get("p"), "AI")
                 convo.append("%s：%s" % (who, str(r.get("text", ""))[:300]))
             known = ["【他是怎样的人】", prof["portrait"] or "（还不了解）", "【已经记住的事】"]
             known += ["%s｜%s" % (x["id"], x["text"]) for x in prof["notes"][:60]] or ["（还没有）"]
@@ -177,6 +181,7 @@ class Memory:
             data = self._parse(self.llm(msgs, 700, 0.3))
             if data is None:
                 return None
+            pid = new[-1].get("p") if new else None
             with self._lock(uid):
                 prof = self._load(uid)
                 drop = {str(x) for x in data.get("drop") or []}
@@ -185,15 +190,16 @@ class Memory:
                 for t in data.get("add") or []:
                     t = re.sub(r"^(用户|他|她)", "你", str(t).strip()).replace("用户", "你")[:40]
                     if t and t not in have:
-                        added.append({"id": secrets.token_hex(4), "text": t, "d": _today(), "p": new[-1].get("p")})
+                        added.append({"id": secrets.token_hex(4), "text": t, "d": _today(), "p": pid})
                 prof["notes"] = (added + [x for x in prof["notes"] if x["id"] not in drop])[:NOTE_CAP]
                 ep = str(data.get("episode") or "").strip()[:80]
                 if ep:
-                    prof["episodes"] = (prof["episodes"] + [{"d": _today(), "p": new[-1].get("p"), "text": ep}])[-EPISODE_CAP:]
+                    prof["episodes"] = (prof["episodes"] + [{"d": _today(), "p": pid, "text": ep}])[-EPISODE_CAP:]
                 pt = str(data.get("portrait") or "").strip()
                 if 20 <= len(pt) <= 400:
                     prof["portrait"] = pt
-                prof["upto"] = end
+                prof["upto"] += nlines
+                prof["folded"] += n_user
                 self._save(uid, prof)
             return {"add": [x["text"] for x in added], "episode": ep}
         finally:
@@ -231,10 +237,11 @@ class Memory:
         with self._lock(uid):
             prof = self._load(uid)
         lv, days = self.level(prof)
-        names = {"bange": "半格", "pingzuo": "平坐"}
         out = ["【你对他的了解】（两个“另一个他”共用；他说过的才算数）",
                "认识第 %d 天，他一共说过 %d 句话。" % (days, prof["msgs"])]
-        if lv <= 1:
+        if prof["msgs"] == 0:
+            out.append(NEW_USER_LINE)
+        elif lv <= 1:
             out.append("你们还不太熟：多听，少下判断，别装作很懂他。")
         if prof["portrait"]:
             out.append("他是怎样的人：" + prof["portrait"])
@@ -244,9 +251,8 @@ class Memory:
         eps = prof["episodes"]
         if eps:
             out.append("最近几次聊天：")
-            out += ["- %s 跟%s：%s" % (e["d"][5:], names.get(e.get("p"), "你们"), e["text"]) for e in eps[-5:]]
-            older = eps[:-5]
-            q = _bigrams(recent_user_text)
+            out += ["- %s 跟%s：%s" % (e["d"][5:], self.names.get(e.get("p"), "你们"), e["text"]) for e in eps[-5:]]
+            older, q = eps[:-5], _bigrams(recent_user_text)
             if older and q:
                 scored = sorted(((len(q & _bigrams(e["text"])), i) for i, e in enumerate(older)), reverse=True)
                 hits = [older[i] for s, i in scored[:3] if s >= 2]

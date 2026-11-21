@@ -5,23 +5,11 @@
 """
 import os
 import secrets
-import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(ROOT, ".secrets", "mylife.env"), encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k, v)
-os.environ["MYLIFE_PERSONAS"] = os.path.join(ROOT, "personas")
-os.environ["MYLIFE_STYLE"] = os.path.join(ROOT, "prompts", "de-ai-style.txt")
-os.environ["MYLIFE_SELF_FRAME"] = os.path.join(ROOT, "prompts", "self-frame.txt")
-os.environ["MYLIFE_CLOSING_STYLE"] = os.path.join(ROOT, "prompts", "closing-style.txt")
-os.environ.setdefault("MYLIFE_CACHE", os.path.join(ROOT, ".eval-cache"))
-sys.path.insert(0, os.path.join(ROOT, "server"))
-from memory import Memory  # noqa: E402
-import mylife_server as srv  # noqa: E402
+from _boot import server
+
+srv = server()
+from memory import Memory  # noqa: E402  (server() put server/ on the path)
 
 TALKS = [
     ("pingzuo", ["今天又加班到十点", "回来还要给女儿检查作业，她叫朵朵，上二年级", "我老婆出差了，家里就我一个大人", "说实话我有点撑不住，但又不能跟谁说"]),
@@ -32,20 +20,18 @@ LAST = ("bange", "老板又让我周六去公司，我该去吗")
 
 
 def llm(msgs, max_tokens, temperature):
-    return srv.llm_call(srv.CHAT_PRIMARY[0], srv.CHAT_PRIMARY[1], msgs, max_tokens=max_tokens, temperature=temperature, timeout=40)
+    return srv.complete(msgs, max_tokens, temperature, timeout=40)[0]
 
 
 def main():
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    mem = Memory(os.path.join(os.environ["MYLIFE_CACHE"], "users"), llm)
+    mem = Memory(os.path.join(os.environ["MYLIFE_CACHE"], "users"), llm, {k: v[0] for k, v in srv.PERSONAS.items()})
     uid = "demo" + secrets.token_hex(8)
     for pid, said in TALKS:
         hist = []
         for u in said:
             hist.append({"role": "user", "content": u})
             know = mem.context(uid, u)
-            reply = srv.postprocess(pid, u, srv.llm_call(srv.CHAT_PRIMARY[0], srv.CHAT_PRIMARY[1], srv.build_messages(pid, {"nick": "老陈", "history": hist}, know)))
+            reply = srv.postprocess(u, srv.complete(srv.build_messages(pid, {"nick": "老陈", "history": hist}, know))[0])
             hist.append({"role": "assistant", "content": reply})
             mem.append(uid, pid, [("user", u), ("ai", reply)])
             print("  他：%s\n  %s：%s" % (u, srv.PERSONAS[pid][0], reply.replace("\n", " ")))
@@ -58,7 +44,7 @@ def main():
         print(" -", n["text"])
     pid, u = LAST
     know = mem.context(uid, u)
-    reply = srv.llm_call(srv.CHAT_PRIMARY[0], srv.CHAT_PRIMARY[1], srv.build_messages(pid, {"nick": "老陈", "history": [{"role": "user", "content": u}]}, know))
+    reply = srv.postprocess(u, srv.complete(srv.build_messages(pid, {"nick": "老陈", "history": [{"role": "user", "content": u}]}, know))[0])
     print("\n== 新的一次（%s）\n  他：%s\n  %s：%s" % (srv.PERSONAS[pid][0], u, srv.PERSONAS[pid][0], reply))
     print("\n记忆文件：", os.path.join(os.environ["MYLIFE_CACHE"], "users", uid))
 

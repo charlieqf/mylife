@@ -12,18 +12,11 @@ import json
 import os
 import subprocess
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from _boot import ROOT, read_env
 
 
 def deploy_env():
-    env = {}
-    with open(os.path.join(ROOT, ".secrets", "deploy.env"), encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                env[k] = os.path.expandvars(v.replace("$HOME", os.path.expanduser("~")))
-    return env
+    return {k: os.path.expandvars(v.replace("$HOME", os.path.expanduser("~"))) for k, v in read_env("deploy.env").items()}
 
 
 def main():

@@ -7,28 +7,17 @@
 
 评测集：personas/<id>/评测集.jsonl，每行 {"id","cat","turns":[{"role","content"}...],"expect","avoid"}，
 turns 最后一条必须是 user。结果写到 personas/<id>/eval-runs/<时间>-<模型>.md 和 .json。
-密钥从 .secrets/mylife.env 读入环境变量，不写进代码。
+密钥从 .secrets/mylife.env 读入环境变量（tools/_boot.py），不写进代码。
 """
 import argparse
 import datetime
 import json
 import os
-import sys
 from concurrent.futures import ThreadPoolExecutor
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(ROOT, ".secrets", "mylife.env"), encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k, v)
-os.environ["MYLIFE_PERSONAS"] = os.path.join(ROOT, "personas")
-os.environ["MYLIFE_STYLE"] = os.path.join(ROOT, "prompts", "de-ai-style.txt")
-os.environ["MYLIFE_SELF_FRAME"] = os.path.join(ROOT, "prompts", "self-frame.txt")
-os.environ.setdefault("MYLIFE_CACHE", os.path.join(ROOT, ".eval-cache"))
-sys.path.insert(0, os.path.join(ROOT, "server"))
-import mylife_server as srv  # noqa: E402
+from _boot import ROOT, server
+
+srv = server()
 
 
 def main():
@@ -53,8 +42,7 @@ def main():
         msgs = srv.build_messages(args.persona, req)
         t0 = datetime.datetime.now()
         try:
-            reply, err = srv.postprocess(args.persona, msgs[-1]["content"],
-                                         srv.llm_call(args.endpoint, args.model, msgs)), None
+            reply, err = srv.postprocess(msgs[-1]["content"], srv.llm_call(args.endpoint, args.model, msgs)), None
         except srv.LLMError as e:
             reply, err = None, str(e)
         return dict(c, reply=reply, error=err, secs=(datetime.datetime.now() - t0).total_seconds(),

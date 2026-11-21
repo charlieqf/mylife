@@ -21,21 +21,22 @@ HOST=$MYLIFE_DEPLOY_HOST
 SSH_OPTS=(-p "$MYLIFE_DEPLOY_PORT" -i "$MYLIFE_DEPLOY_KEY" -o IdentitiesOnly=yes -o BatchMode=yes)
 SCP_OPTS=(-q -P "$MYLIFE_DEPLOY_PORT" -i "$MYLIFE_DEPLOY_KEY" -o IdentitiesOnly=yes)
 STAGE=/tmp/mylife-deploy
+SERVER_FILES="mylife_server.py memory.py voices.json calibrate.py"
 
 ssh "${SSH_OPTS[@]}" "$HOST" "rm -rf $STAGE && mkdir -p $STAGE"
-scp "${SCP_OPTS[@]}" server/mylife_server.py server/memory.py server/voices.json server/calibrate.py \
+scp "${SCP_OPTS[@]}" $(printf 'server/%s ' $SERVER_FILES) \
   prototype/mylife-prototype.html deploy/nginx-mylife.conf deploy/mylife.service "$HOST:$STAGE/"
 
-# Persona prompts (档案 + 风格示例), the 去AI味 style block and the 收尾一句 block, read on every call.
-CONTENT=$(ls personas/*/人格档案.md personas/*/风格示例.md prompts/de-ai-style.txt prompts/closing-style.txt prompts/self-frame.txt prompts/rainbow-cards.json 2>/dev/null || true)
-tar -czf - $CONTENT | ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $STAGE/content && tar -xzf - -C $STAGE/content"
+# Persona prompts (档案 + 风格示例) and everything in prompts/ (另一个你, 去AI味, 收尾一句, 彩虹卡).
+# The service is restarted below, so the server picks them up (it caches them after the first read).
+tar -czf - personas/*/人格档案.md personas/*/风格示例.md prompts | ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $STAGE/content && tar -xzf - -C $STAGE/content"
 
 if [ "${1:-}" = "--secrets" ]; then
   ssh "${SSH_OPTS[@]}" "$HOST" 'umask 027; cat > /etc/mylife/secrets.env.new && chown root:mylife /etc/mylife/secrets.env.new && chmod 640 /etc/mylife/secrets.env.new && mv /etc/mylife/secrets.env.new /etc/mylife/secrets.env' < .secrets/mylife.env
 fi
 
 ssh "${SSH_OPTS[@]}" "$HOST" "set -e
-install -m 644 $STAGE/mylife_server.py $STAGE/memory.py $STAGE/voices.json $STAGE/calibrate.py /opt/mylife/app/
+(cd $STAGE && install -m 644 $SERVER_FILES /opt/mylife/app/)
 rm -rf /opt/mylife/app/personas /opt/mylife/app/prompts
 cp -r $STAGE/content/personas $STAGE/content/prompts /opt/mylife/app/
 chmod -R a+rX /opt/mylife/app/personas /opt/mylife/app/prompts

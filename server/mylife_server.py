@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""MyLife phase-0 demo backend: voice catalog + Tencent Cloud TTS proxy.
+"""MyLife phase-0 demo backend. Stdlib only; nginx serves the page, this process answers /api/*.
 
-Stdlib only. The page is served by nginx; this process only answers /api/*.
 Secrets come from the environment (systemd EnvironmentFile=/etc/mylife/secrets.env):
-  TENCENT_SECRET_ID, TENCENT_SECRET_KEY, TENCENT_TTS_REGION (default ap-shanghai)
+  TENCENT_SECRET_ID, TENCENT_SECRET_KEY, TENCENT_TTS_REGION, TENCENT_TOKENHUB_API_KEY, DASHSCOPE_API_KEY
 
 Endpoints
-  GET  /api/health
-  GET  /api/voices                      -> {"provider": "tencent", "voices": [...]}
-  POST /api/tts {v, cps, p, t}          -> audio/mpeg
-       v   voice id from voices.json
-       cps target characters per second (the app's speed slider)
-       p   persona id (bange | pingzuo), picks the emotion for multi-emotion voices
-       t   text (<= MAX_TEXT chars)
+  GET  /api/health | /api/voices | /api/cards | /api/persona?p= | /api/self?u=
+  POST /api/chat     {p, u, nick, profile, notme, history}   -> {reply, model, ms}
+  POST /api/card     {p, u, nick, id}                         -> {text, model, ms}   彩虹卡开场
+  POST /api/closing  {p, u, nick, history}                    -> {text, model, ms}   收尾一句
+  POST /api/sync     {u}  fold the latest talk into long-term memory (server/memory.py)
+  POST /api/self/forget {u, id} | /api/self/wipe {u} | /api/self/import {u, notes}
+  POST /api/fb       {p, mid, v, reply, user}                 👍/👎, logged for distilling
+  POST /api/tts      {v, cps, p, t}  -> audio/mpeg (Tencent TextToVoice, cached per chunk)
+  POST /api/asr      16 kHz mono WAV -> {text}  (Tencent 一句话识别, audio not stored)
 """
 import base64
 import datetime
+import functools
 import hashlib
 import hmac
 import json
@@ -25,13 +27,14 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from memory import Memory, valid_uid
+from memory import NEW_USER_LINE, Memory, valid_uid, write_json_atomic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOG_PATH = os.environ.get("MYLIFE_VOICES", os.path.join(HERE, "voices.json"))
@@ -235,17 +238,20 @@ CHAT_FALLBACK = (os.environ.get("MYLIFE_CHAT_FALLBACK_ENDPOINT", "dashscope"),
                  os.environ.get("MYLIFE_CHAT_FALLBACK_MODEL", "qwen3.8-max"))
 PERSONAS = {"bange": ("半格", "理性", "pingzuo"), "pingzuo": ("平坐", "陪伴", "bange")}
 PERSONA_DIR = os.environ.get("MYLIFE_PERSONAS", os.path.join(HERE, "personas"))
-STYLE_PATH = os.environ.get("MYLIFE_STYLE", os.path.join(HERE, "prompts", "de-ai-style.txt"))
-SELF_FRAME_PATH = os.environ.get("MYLIFE_SELF_FRAME", os.path.join(HERE, "prompts", "self-frame.txt"))
+PROMPT_DIR = os.path.join(HERE, "prompts")
+STYLE_PATH = os.environ.get("MYLIFE_STYLE", os.path.join(PROMPT_DIR, "de-ai-style.txt"))
+SELF_FRAME_PATH = os.environ.get("MYLIFE_SELF_FRAME", os.path.join(PROMPT_DIR, "self-frame.txt"))
+CLOSING_PATH = os.environ.get("MYLIFE_CLOSING_STYLE", os.path.join(PROMPT_DIR, "closing-style.txt"))
+CARDS_PATH = os.environ.get("MYLIFE_CARDS", os.path.join(PROMPT_DIR, "rainbow-cards.json"))
 OUTPUT_RULE = "只输出你要说的话本身：纯文本，不加引号，不加名字前缀，不写动作或旁白。"
 CHAT_PER_MIN = int(os.environ.get("MYLIFE_CHAT_PER_MIN", "20"))
 CHAT_DAILY = int(os.environ.get("MYLIFE_CHAT_DAILY", "3000"))
 ASR_PER_MIN = int(os.environ.get("MYLIFE_ASR_PER_MIN", "20"))
 ASR_DAILY = int(os.environ.get("MYLIFE_ASR_DAILY", "3000"))
 ASR_MAX_BYTES = 2_200_000  # 60 s of 16 kHz mono 16-bit is ~1.92 MB
+FB_PER_MIN = 60
 CHAT_LOG_DIR = os.path.join(CACHE_DIR, "chatlog")
 FEEDBACK_DIR = os.path.join(CACHE_DIR, "feedback")
-FB_PER_MIN = 60
 # Same signals as the page's R.crisis plus a few softer ones; the page answers the explicit ones with a
 # fixed safety message before calling us, this is the net for whatever reaches the model.
 CRISIS = re.compile(r"(不想活|自杀|想死|轻生|结束生命|活着(好|真|太|也)?没(什么)?意思|活着没有意义|活着有什么意义"
@@ -253,15 +259,21 @@ CRISIS = re.compile(r"(不想活|自杀|想死|轻生|结束生命|活着(好|�
 SAFETY_LINE = "如果你有伤害自己的念头，请马上联系身边信任的人，或拨打心理援助热线 12356；情况紧急请拨打 110 或 120。"
 
 
-def postprocess(pid, user_text, reply):
+def postprocess(user_text, reply):
     reply = reply.strip().strip("“”\"")
     if CRISIS.search(user_text or "") and "12356" not in reply:
         reply += "\n\n" + SAFETY_LINE
     return reply
 
 
+# ---------------------------------------------------------------- LLM
 class LLMError(Exception):
     pass
+
+
+class DailyCap(LLMError):
+    def __init__(self):
+        super().__init__("DailyCap")
 
 
 def llm_call(endpoint, model, messages, max_tokens=300, temperature=0.8, timeout=25):
@@ -290,6 +302,21 @@ def llm_call(endpoint, model, messages, max_tokens=300, temperature=0.8, timeout
     return text.strip()
 
 
+def complete(msgs, max_tokens=300, temperature=0.8, timeout=25, tidy=str.strip):
+    """Primary model, then the fallback if it fails or says nothing. Returns (text, model)."""
+    for endpoint, model in (CHAT_PRIMARY, CHAT_FALLBACK):
+        try:
+            text = tidy(llm_call(endpoint, model, msgs, max_tokens, temperature, timeout))
+            if text:
+                return text, model
+            err = "empty reply"
+        except LLMError as e:
+            err = str(e)
+        sys.stderr.write("%s failed (%s)\n" % (model, err))
+    raise LLMError(err)
+
+
+# ---------------------------------------------------------------- prompts
 def _read(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -298,8 +325,9 @@ def _read(path):
         return ""
 
 
+@functools.lru_cache(maxsize=None)
 def persona_prompt(pid):
-    """人格档案 + 风格示例（提示词部分）+ 去AI味风格块。每次读文件，改完部署即生效。"""
+    """人格档案 + 另一个你 + 风格示例（提示词部分）+ 去AI味风格块。读一次缓存；deploy.sh 每次都会重启服务。"""
     pdir = os.path.join(PERSONA_DIR, pid)
     # HTML comments hold editorial notes (blueprint names, what to avoid); keep them out of the prompt.
     parts = [re.sub(r"<!--.*?-->", "", _read(os.path.join(pdir, "人格档案.md")), flags=re.S).strip(),
@@ -312,78 +340,7 @@ def persona_prompt(pid):
     return "\n\n".join(p for p in parts if p)
 
 
-def clip(s, n):
-    s = str(s or "").strip()
-    return s[:n]
-
-
-def build_messages(pid, req, know=None):
-    name, kind, other = PERSONAS[pid]
-    oname, okind, _ = PERSONAS[other]
-    ctx = ["【这位用户】", "称呼：%s" % (clip(req.get("nick"), 12) or "朋友")]
-    prof = clip(req.get("profile"), 800)
-    if prof:
-        ctx.append("性格画像（只当线索，不当结论；不要逐条复述，也不要主动提星座、MBTI 这些词，除非对方先提）：\n" + prof)
-    notme = clip(req.get("notme"), 200)
-    if notme:
-        ctx.append("用户标了“不像我”的画像条目（不要再拿这些说事）：" + notme)
-    mems = [clip(x, 80) for x in (req.get("memories") or [])[:8] if str(x).strip()]
-    if know:
-        ctx.append(know)
-    elif mems:
-        ctx.append("【你们记得的事】（之前聊过的；需要时自然提起，不要列出来）\n" + "\n".join("- " + x for x in mems))
-    ctx.append("【此刻】今天是 %s。用户正在和你（%s）聊。另一位是%s（%s）；当用户需要的东西%s更合适时，可以建议去找%s。"
-               % (datetime.date.today().isoformat(), name, oname, okind, oname, oname))
-    system = persona_prompt(pid) + "\n\n" + "\n".join(ctx) + "\n\n" + OUTPUT_RULE
-    msgs = [{"role": "system", "content": system}]
-    for h in (req.get("history") or [])[-16:]:
-        role = "user" if h.get("role") == "user" else "assistant"
-        content = clip(h.get("content"), 500)
-        if content:
-            if msgs[-1]["role"] == role and role != "system":
-                msgs[-1]["content"] += "\n" + content  # merge consecutive same-role turns
-            else:
-                msgs.append({"role": role, "content": content})
-    if msgs[-1]["role"] != "user":
-        raise ValueError("last message must be from the user")
-    return msgs
-
-
-CLOSING_PATH = os.environ.get("MYLIFE_CLOSING_STYLE", os.path.join(HERE, "prompts", "closing-style.txt"))
-CLOSING_TASK = ("【现在】用户要结束这次聊天了。用你（%s）的口吻，对用户说最后一句话，把今天聊的东西收住。"
-                "硬性要求：只说一句，不超过 40 个字；必须落在用户今天亲口说过的具体内容上，别人套不上；"
-                "不给建议，不提问，不用感叹号，不用表情，不说“今天聊了很多”“希望你”“加油”“一切都会好”这类话。")
-
-
-def build_closing(pid, req):
-    """System = persona + 收尾一句的写法 + task; user = today's transcript."""
-    name = PERSONAS[pid][0]
-    lines, said = [], []
-    for h in (req.get("history") or [])[-20:]:
-        c = clip(h.get("content"), 300)
-        if not c:
-            continue
-        if h.get("role") == "user":
-            lines.append("用户：" + c)
-            said.append(c)
-        else:
-            lines.append("你：" + c)
-    if not said:
-        raise ValueError("nothing to close")
-    system = "\n\n".join(p for p in (persona_prompt(pid), _read(CLOSING_PATH).strip(),
-                                     "用户的称呼：%s" % (clip(req.get("nick"), 12) or "朋友"),
-                                     CLOSING_TASK % name, OUTPUT_RULE) if p)
-    user = "这是这次的聊天记录：\n" + "\n".join(lines) + "\n\n用户要走了。说你的最后一句。"
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}], "\n".join(said)
-
-
-SEP = chr(10) * 2
-CARDS_PATH = os.environ.get("MYLIFE_CARDS", os.path.join(HERE, "prompts", "rainbow-cards.json"))
-CARD_TASK = ("【现在】他刚翻开今天的彩虹卡，上面写着「%s」（%s色，话题：%s）。这是今天聊天的开头。"
-             "用你的口吻接住这张卡：一到两句，先用你自己的话轻轻回应它（不要复述卡上的原话），再问一个具体、好回答的小问题。"
-             "可以联系你记得的他的事，但别硬凑。不评价这张卡（不说“来得巧”“正好”“这句话说得好”），不提也不解读卡的颜色，不讲运势、能量、脉轮，不说教。")
-
-
+@functools.lru_cache(maxsize=None)
 def load_cards():
     try:
         with open(CARDS_PATH, encoding="utf-8") as f:
@@ -393,19 +350,90 @@ def load_cards():
         return {"colors": [], "cards": []}
 
 
+def clip(s, n):
+    return str(s or "").strip()[:n]
+
+
+def system_prompt(pid, *blocks):
+    """Every endpoint's system prompt: persona, then the blocks it opts into, then the output rule."""
+    return "\n\n".join([persona_prompt(pid)] + [b for b in blocks if b] + [OUTPUT_RULE])
+
+
+def user_block(req):
+    return "【这位用户】\n称呼：%s" % (clip(req.get("nick"), 12) or "朋友")
+
+
+def build_messages(pid, req, know=None):
+    """Chat: persona + who the user is (+ what the selves know) + the last 16 turns."""
+    name, _, other = PERSONAS[pid]
+    oname, okind, _ = PERSONAS[other]
+    ctx = [user_block(req)]
+    prof = clip(req.get("profile"), 800)
+    if prof:
+        ctx.append("性格画像（只当线索，不当结论；不要逐条复述，也不要主动提星座、MBTI 这些词，除非对方先提）：\n" + prof)
+    notme = clip(req.get("notme"), 200)
+    if notme:
+        ctx.append("用户标了“不像我”的画像条目（不要再拿这些说事）：" + notme)
+    if know:
+        ctx.append(know)
+    ctx.append("【此刻】今天是 %s。用户正在和你（%s）聊。另一位是%s（%s）；当用户需要的东西%s更合适时，可以建议去找%s。"
+               % (datetime.date.today().isoformat(), name, oname, okind, oname, oname))
+    msgs = [{"role": "system", "content": system_prompt(pid, "\n".join(ctx))}]
+    for h in (req.get("history") or [])[-16:]:
+        role = "user" if h.get("role") == "user" else "assistant"
+        content = clip(h.get("content"), 500)
+        if content:
+            if msgs[-1]["role"] == role:
+                msgs[-1]["content"] += "\n" + content  # merge consecutive same-role turns
+            else:
+                msgs.append({"role": role, "content": content})
+    if msgs[-1]["role"] != "user":
+        raise ValueError("last message must be from the user")
+    return msgs
+
+
+CLOSING_TASK = ("【现在】用户要结束这次聊天了。用你（%s）的口吻，对用户说最后一句话，把今天聊的东西收住。"
+                "硬性要求：只说一句，不超过 40 个字；必须落在用户今天亲口说过的具体内容上，别人套不上；"
+                "不给建议，不提问，不用感叹号，不用表情，不说“今天聊了很多”“希望你”“加油”“一切都会好”这类话。")
+
+
+def build_closing(pid, req):
+    """收尾一句: persona + 收尾一句的写法 + task; the user message is the transcript. Returns (msgs, what the user said)."""
+    lines, said = [], []
+    for h in (req.get("history") or [])[-20:]:
+        c = clip(h.get("content"), 300)
+        if c and h.get("role") == "user":
+            lines.append("用户：" + c)
+            said.append(c)
+        elif c:
+            lines.append("你：" + c)
+    if not said:
+        raise ValueError("nothing to close")
+    system = system_prompt(pid, _read(CLOSING_PATH).strip(), user_block(req), CLOSING_TASK % PERSONAS[pid][0])
+    user = "这是这次的聊天记录：\n" + "\n".join(lines) + "\n\n用户要走了。说你的最后一句。"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}], "\n".join(said)
+
+
 def tidy_closing(text):
+    """First line only, without quotes; cut long ones at a sentence break (the prompt asks for <= 40 字)."""
     text = text.strip().strip("“”\"「」")
     text = text.splitlines()[0].strip() if text else ""
-    if len(text) > 60:  # keep whole sentences
+    if len(text) > 60:
         cut = max(text.rfind("。", 0, 60), text.rfind("，", 0, 60))
         text = text[:cut + 1] if cut > 10 else text[:60]
     return text
 
 
-MEMO_PROMPT = ("下面是一段用户和 AI 人格的聊天。把值得以后记住的事写成对用户说的话，必须以“你”开头，最多 2 条，"
-               "每条不超过 30 个字，只写用户说过的事实、处境或在意的东西，不写建议、不评价、不写 AI 说了什么。"
-               "例：你在纠结要不要辞职，最烦的是老板周末找你。"
-               "没有值得记的就输出“无”。每条一行，不加序号。")
+CARD_TASK = ("【现在】他刚翻开今天的彩虹卡，上面写着「%s」（%s色，话题：%s）。这是今天聊天的开头。"
+             "用你的口吻接住这张卡：一到两句，先用你自己的话轻轻回应它（不要复述卡上的原话），再问一个具体、好回答的小问题。"
+             "可以联系你记得的他的事，但别硬凑。不评价这张卡（不说“来得巧”“正好”“这句话说得好”），不提也不解读卡的颜色，不讲运势、能量、脉轮，不说教。")
+
+
+def build_card(pid, req, card, know=None):
+    """彩虹卡开场: persona + who the user is + what the selves know + task."""
+    color = next((c for c in load_cards()["colors"] if c["key"] == card["c"]), {"name": "", "theme": ""})
+    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, CARD_TASK % (card["t"], color["name"], color["theme"]))
+    return [{"role": "system", "content": system}, {"role": "user", "content": "（我抽到一张彩虹卡：「%s」）" % card["t"]}]
 
 
 # ---------------------------------------------------------------- app state
@@ -415,18 +443,22 @@ class App:
         skey = os.environ.get("TENCENT_SECRET_KEY", "")
         if not sid or not skey:
             sys.exit("TENCENT_SECRET_ID / TENCENT_SECRET_KEY missing from environment")
-        self.tts = TencentTTS(sid, skey, os.environ.get("TENCENT_TTS_REGION", "ap-shanghai"))
-        self.asr = TencentASR(sid, skey, os.environ.get("TENCENT_TTS_REGION", "ap-shanghai"))
+        region = os.environ.get("TENCENT_TTS_REGION", "ap-shanghai")
+        self.tts = TencentTTS(sid, skey, region)
+        self.asr = TencentASR(sid, skey, region)
         with open(CATALOG_PATH, encoding="utf-8") as f:
             self.catalog = json.load(f)
         self.voices = {str(v["id"]): v for v in self.catalog["voices"]}
-        self.pool = ThreadPoolExecutor(max_workers=6)
-        self.mem = Memory(os.path.join(CACHE_DIR, "users"), self._mem_llm)
-        self.lock = threading.Lock()
-        self.hits = {"tts": defaultdict(deque), "chat": defaultdict(deque), "asr": defaultdict(deque), "fb": defaultdict(deque)}
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        os.makedirs(CHAT_LOG_DIR, exist_ok=True)
-        os.makedirs(FEEDBACK_DIR, exist_ok=True)
+        self.pool = ThreadPoolExecutor(max_workers=6)       # audio chunks, on the request path
+        self.fold_pool = ThreadPoolExecutor(max_workers=2)  # memory folds, in the background
+        self.mem = Memory(os.path.join(CACHE_DIR, "users"),
+                          lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0],
+                          {pid: p[0] for pid, p in PERSONAS.items()})
+        self.lock = threading.Lock()       # rate limits
+        self.disk_lock = threading.Lock()  # usage.json and the jsonl logs
+        self.hits = {k: defaultdict(deque) for k in ("tts", "chat", "asr", "fb")}
+        for d in (CACHE_DIR, CHAT_LOG_DIR, FEEDBACK_DIR):
+            os.makedirs(d, exist_ok=True)
         self.usage_path = os.path.join(CACHE_DIR, "usage.json")
         try:
             with open(self.usage_path) as f:
@@ -435,7 +467,7 @@ class App:
             self.usage = {}
 
     # -- limits
-    def allow_ip(self, ip, kind="tts"):
+    def allow_ip(self, ip, kind):
         now = time.time()
         limit = {"tts": PER_IP_PER_MIN, "chat": CHAT_PER_MIN, "asr": ASR_PER_MIN, "fb": FB_PER_MIN}[kind]
         with self.lock:
@@ -449,156 +481,81 @@ class App:
 
     def _bump(self, key, n, cap):
         day = datetime.date.today().isoformat()
-        with self.lock:
+        with self.disk_lock:
             if self.usage.get("day") != day:
                 self.usage = {"day": day}
             used = self.usage.get(key, 0)
             if used + n > cap:
                 return False
             self.usage[key] = used + n
-            tmp = self.usage_path + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(self.usage, f)
-            os.replace(tmp, self.usage_path)
+            write_json_atomic(self.usage_path, self.usage)
             return True
 
-    def charge(self, n):
-        return self._bump("tts_chars", n, DAILY_CHAR_CAP)
-
-    # -- chat
-    def chat(self, pid, req, ip):
+    # -- LLM endpoints: build the prompt, call, tidy, remember, log
+    def llm(self, msgs, max_tokens=300, temperature=0.8, timeout=25, tidy=str.strip):
+        """Every model call goes through here: daily cap, primary then fallback, timing. -> (text, model, ms)"""
         if not self._bump("chat_calls", 1, CHAT_DAILY):
-            raise LLMError("DailyCap")
+            raise DailyCap()
+        t0 = time.time()
+        text, model = complete(msgs, max_tokens, temperature, timeout, tidy)
+        return text, model, int((time.time() - t0) * 1000)
+
+    def chat(self, pid, req, ip):
         uid = req.get("u") if valid_uid(req.get("u")) else None
         users = [clip(h.get("content"), 300) for h in (req.get("history") or [])[-6:] if h.get("role") == "user"]
-        know = self.mem.context(uid, " ".join(users[-3:])) if uid else None
-        msgs = build_messages(pid, req, know)
-        t0 = time.time()
-        used = CHAT_PRIMARY
-        try:
-            reply = llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs)
-            if not reply:
-                raise LLMError("empty reply")
-        except LLMError as e:
-            sys.stderr.write("chat primary failed (%s), using fallback\n" % e)
-            used = CHAT_FALLBACK
-            reply = llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs)
-        reply = postprocess(pid, msgs[-1]["content"], reply)
-        ms = int((time.time() - t0) * 1000)
-        self.log_chat({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": ip, "p": pid,
-                       "nick": clip(req.get("nick"), 12), "user": msgs[-1]["content"], "reply": reply,
-                       "model": used[1], "ms": ms})
+        msgs = build_messages(pid, req, self.mem.context(uid, " ".join(users[-3:])) if uid else None)
+        reply, model, ms = self.llm(msgs)
+        reply = postprocess(msgs[-1]["content"], reply)
+        self.log_turn("chat", ip, pid, req, msgs[-1]["content"], reply, model, ms)
+        if uid and self.mem.append(uid, pid, [("user", users[-1] if users else msgs[-1]["content"]), ("ai", reply)]) >= 8:
+            self.fold_pool.submit(self.fold, uid, 8)
+        return {"reply": reply, "model": model, "ms": ms}
+
+    def closing(self, pid, req, ip):
+        """One sentence that sums up the session, said when the user taps 结束本次对话."""
+        msgs, said = build_closing(pid, req)
+        text, model, ms = self.llm(msgs, max_tokens=120, temperature=0.7, tidy=tidy_closing)
+        text = postprocess(said, text)
+        self.log_turn("closing", ip, pid, req, said[-300:], text, model, ms)
+        if valid_uid(req.get("u")):
+            self.mem.append(req["u"], pid, [("closing", text)])
+            self.fold_pool.submit(self.fold, req["u"], 2)
+        return {"text": text, "model": model, "ms": ms}
+
+    def card(self, pid, req, ip):
+        """Opening line for a 彩虹卡 the user just drew, in the persona's voice and with its memory."""
+        card = next((c for c in load_cards()["cards"] if c["id"] == str(req.get("id", ""))), None)
+        if not card:
+            raise ValueError("unknown card")
+        uid = req.get("u") if valid_uid(req.get("u")) else None
+        text, model, ms = self.llm(build_card(pid, req, card, self.mem.context(uid, card["t"]) if uid else None),
+                                   max_tokens=160)
+        text = postprocess("", text)
+        self.log_turn("card", ip, pid, req, card["t"], text, model, ms)
         if uid:
-            pending = self.mem.append(uid, pid, [("user", users[-1] if users else msgs[-1]["content"]), ("ai", reply)])
-            if pending >= 8:
-                self.pool.submit(self._fold, uid, 8)
-        return reply, used[1], ms
+            self.mem.append(uid, pid, [("card", "（抽到彩虹卡「%s」）" % card["t"]), ("ai", text)])
+        return {"text": text, "model": model, "ms": ms}
 
-    def _mem_llm(self, msgs, max_tokens, temperature):
-        if not self._bump("chat_calls", 1, CHAT_DAILY):
-            raise LLMError("DailyCap")
-        try:
-            return llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs, max_tokens=max_tokens, temperature=temperature, timeout=40)
-        except LLMError:
-            return llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs, max_tokens=max_tokens, temperature=temperature, timeout=40)
-
-    def _fold(self, uid, min_user):
+    def fold(self, uid, min_user):
         try:
             return self.mem.consolidate(uid, min_user)
         except Exception as e:  # background work must never take the server down
             sys.stderr.write("consolidate %s failed: %s\n" % (uid[:6], e))
             return None
 
-    def memo(self, req):
-        if not self._bump("chat_calls", 1, CHAT_DAILY):
-            raise LLMError("DailyCap")
-        lines = []
-        for h in (req.get("history") or [])[-20:]:
-            who = "用户" if h.get("role") == "user" else "AI"
-            c = clip(h.get("content"), 300)
-            if c:
-                lines.append("%s：%s" % (who, c))
-        if not lines:
-            return []
-        msgs = [{"role": "system", "content": MEMO_PROMPT}, {"role": "user", "content": "\n".join(lines)}]
-        try:
-            text = llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs, max_tokens=120, temperature=0.3)
-        except LLMError:
-            text = llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs, max_tokens=120, temperature=0.3)
-        out = []
-        for ln in text.splitlines():
-            ln = re.sub(r"^[\-\d\.、\s·•]+", "", ln).strip()
-            ln = re.sub(r"^(用户|他|她)", "你", ln).replace("用户", "你")
-            if ln and ln != "无" and len(ln) <= 40:
-                out.append(ln)
-        return out[:2]
-
-    def closing(self, pid, req, ip):
-        """One sentence that sums up the session, said when the user taps 结束本次对话."""
-        if not self._bump("chat_calls", 1, CHAT_DAILY):
-            raise LLMError("DailyCap")
-        msgs, said = build_closing(pid, req)
-        t0 = time.time()
-        used = CHAT_PRIMARY
-        try:
-            text = tidy_closing(llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs, max_tokens=120, temperature=0.7))
-            if not text:
-                raise LLMError("empty reply")
-        except LLMError as e:
-            sys.stderr.write("closing primary failed (%s), using fallback\n" % e)
-            used = CHAT_FALLBACK
-            text = tidy_closing(llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs, max_tokens=120, temperature=0.7))
-        if not text:
-            raise LLMError("empty reply")
-        text = postprocess(pid, said, text)
-        if valid_uid(req.get("u")):
-            self.mem.append(req["u"], pid, [("closing", text)])
-            self.pool.submit(self._fold, req["u"], 2)
-        ms = int((time.time() - t0) * 1000)
-        self.log_chat({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": ip, "p": pid, "kind": "closing",
-                       "nick": clip(req.get("nick"), 12), "user": said[-300:], "reply": text, "model": used[1], "ms": ms})
-        return text, used[1], ms
-
-    def card_opening(self, pid, req, ip):
-        """Opening line for today's 彩虹卡 (the icebreaker), in the persona's voice and with its memory."""
-        cards = load_cards()
-        card = next((c for c in cards["cards"] if c["id"] == str(req.get("id", ""))), None)
-        if not card:
-            raise ValueError("unknown card")
-        color = next((c for c in cards["colors"] if c["key"] == card["c"]), {"name": "", "theme": ""})
-        uid = req.get("u") if valid_uid(req.get("u")) else None
-        if not self._bump("chat_calls", 1, CHAT_DAILY):
-            raise LLMError("DailyCap")
-        parts = [persona_prompt(pid), "用户的称呼：%s" % (clip(req.get("nick"), 12) or "朋友")]
-        if uid:
-            parts.append(self.mem.context(uid, card["t"]))
-        if not uid or "一共说过 0 句话" in parts[-1]:
-            parts.append("（你们刚认识，你还不知道他的任何事：不要提“上次”“上周”“那件事”这类往事。）")
-        parts += [CARD_TASK % (card["t"], color["name"], color["theme"]), OUTPUT_RULE]
-        msgs = [{"role": "system", "content": SEP.join(parts)},
-                {"role": "user", "content": "（我抽到一张彩虹卡：「%s」）" % card["t"]}]
-        t0 = time.time()
-        try:
-            text = llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs, max_tokens=160, temperature=0.8)
-        except LLMError:
-            text = llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs, max_tokens=160, temperature=0.8)
-        text = postprocess(pid, "", text) or card["q"]
-        if uid:
-            self.mem.append(uid, pid, [("card", "（抽到彩虹卡「%s」）" % card["t"]), ("ai", text)])
-        self.log_chat({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": ip, "p": pid, "kind": "card",
-                       "user": card["t"], "reply": text, "model": CHAT_PRIMARY[1], "ms": int((time.time() - t0) * 1000)})
-        return text
-
-    def log_chat(self, rec):
-        self._append(CHAT_LOG_DIR, rec)
+    # -- logs
+    def log_turn(self, kind, ip, pid, req, user, reply, model, ms):
+        self._append(CHAT_LOG_DIR, {"kind": kind, "ip": ip, "p": pid, "nick": clip(req.get("nick"), 12),
+                                    "user": user, "reply": reply, "model": model, "ms": ms})
 
     def log_feedback(self, rec):
         """👍/👎 on replies: the upvoted ones feed the next round of distilling (tools/upvoted.py)."""
         self._append(FEEDBACK_DIR, rec)
 
     def _append(self, folder, rec):
+        rec = {"t": datetime.datetime.now().isoformat(timespec="seconds"), **rec}
         path = os.path.join(folder, datetime.date.today().isoformat() + ".jsonl")
-        with self.lock:
+        with self.disk_lock:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -611,7 +568,7 @@ class App:
                 return f.read(), True
         except OSError:
             pass
-        if not self.charge(len(text)):
+        if not self._bump("tts_chars", len(text), DAILY_CHAR_CAP):
             raise TTSError("DailyCap", "今日朗读字数已达上限")
         data = self.tts.synth(text, voice, speed, "mp3", rate, emotion)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -627,10 +584,9 @@ class App:
             speed = speed_for_cps(v["curve"], cps)
         else:
             speed = speed_param(cps / float(v.get("baseCps") or 4.0))
-        emotion = (v.get("emotion") or {}).get(persona) if v.get("emotion") else None
+        emotion = (v.get("emotion") or {}).get(persona)
         rate = int(v.get("rate", 16000))
-        chunks = split_text(text)
-        futs = [self.pool.submit(self.chunk_audio, c, voice_id, speed, rate, emotion) for c in chunks]
+        futs = [self.pool.submit(self.chunk_audio, c, voice_id, speed, rate, emotion) for c in split_text(text)]
         parts, cached = [], True
         for i, fu in enumerate(futs):
             data, hit = fu.result()
@@ -658,19 +614,38 @@ class Handler(BaseHTTPRequestHandler):
     def client_ip(self):
         return self.headers.get("X-Real-IP") or self.client_address[0]
 
-    def send_json(self, code, obj, extra=None):
+    def send_json(self, code, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        for k, v in (extra or {}).items():
-            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    def read_json(self, limit):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 0 or n > limit:
+            raise ValueError("bad body size")
+        req = json.loads(self.rfile.read(n).decode("utf-8"))
+        if not isinstance(req, dict):
+            raise ValueError("bad body")
+        return req
+
+    def limited(self, kind):
+        """True (and a 429 already sent) when this IP is over its per-minute limit."""
+        if APP.allow_ip(self.client_ip(), kind):
+            return False
+        self.send_json(429, {"error": "too many requests"})
+        return True
+
+    def llm_failed(self, e):
+        sys.stderr.write("llm error %s\n" % e)
+        return self.send_json(429 if isinstance(e, DailyCap) else 502, {"error": str(e)[:120]})
+
     def do_GET(self):
         path, _, query = self.path.partition("?")
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
         if path == "/api/health":
             return self.send_json(200, {"ok": True})
         if path == "/api/voices":
@@ -678,43 +653,90 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cards":
             return self.send_json(200, load_cards())
         if path == "/api/self":
-            uid = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("u", "")
-            if not valid_uid(uid):
+            if not valid_uid(q.get("u")):
                 return self.send_json(400, {"error": "bad user id"})
-            if not APP.allow_ip(self.client_ip(), "fb"):
-                return self.send_json(429, {"error": "too many requests"})
-            return self.send_json(200, APP.mem.summary(uid))
+            if not self.limited("fb"):
+                self.send_json(200, APP.mem.summary(q["u"]))
+            return None
         if path == "/api/persona":
-            pid = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("p", "")
+            pid = q.get("p", "")
             if pid not in PERSONAS:
                 return self.send_json(400, {"error": "unknown persona"})
             return self.send_json(200, {"p": pid, "model": CHAT_PRIMARY[1],
                                         "text": _read(os.path.join(PERSONA_DIR, pid, "人格档案.md"))})
         return self.send_json(404, {"error": "not found"})
 
-    def read_json(self, limit):
-        n = int(self.headers.get("Content-Length") or 0)
-        if n <= 0 or n > limit:
-            raise ValueError("bad body size")
-        return json.loads(self.rfile.read(n).decode("utf-8"))
-
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        if path in ("/api/chat", "/api/memo", "/api/closing", "/api/card"):
-            return self.handle_chat(path)
-        if path == "/api/fb":
-            return self.handle_fb()
-        if path in ("/api/sync", "/api/self/forget", "/api/self/wipe", "/api/self/import"):
-            return self.handle_self(path)
-        if path == "/api/asr":
-            return self.handle_asr()
-        if path != "/api/tts":
+        handler = {"/api/chat": self.handle_llm, "/api/closing": self.handle_llm, "/api/card": self.handle_llm,
+                   "/api/sync": self.handle_self, "/api/self/forget": self.handle_self,
+                   "/api/self/wipe": self.handle_self, "/api/self/import": self.handle_self,
+                   "/api/fb": self.handle_fb, "/api/asr": self.handle_asr, "/api/tts": self.handle_tts}.get(path)
+        if not handler:
             return self.send_json(404, {"error": "not found"})
+        return handler(path)
+
+    def handle_llm(self, path):
+        """/api/chat, /api/closing, /api/card: {p, u, nick, ...} -> the persona's words."""
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            if n <= 0 or n > 16384:
-                return self.send_json(413, {"error": "bad body size"})
-            req = json.loads(self.rfile.read(n).decode("utf-8"))
+            req = self.read_json(48000)
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        if self.limited("chat"):
+            return None
+        pid = str(req.get("p", ""))
+        if pid not in PERSONAS:
+            return self.send_json(400, {"error": "unknown persona"})
+        run = {"/api/chat": APP.chat, "/api/closing": APP.closing, "/api/card": APP.card}[path]
+        try:
+            return self.send_json(200, run(pid, req, self.client_ip()))
+        except ValueError as e:
+            return self.send_json(400, {"error": str(e)})
+        except LLMError as e:
+            return self.llm_failed(e)
+
+    def handle_self(self, path):
+        """Long-term memory: /api/sync folds the latest talk in (called when the user leaves a chat);
+        forget / wipe let the user delete what the selves know; import seeds from older local notes."""
+        try:
+            req = self.read_json(8192)
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        uid = req.get("u")
+        if not valid_uid(uid):
+            return self.send_json(400, {"error": "bad user id"})
+        if self.limited("chat" if path == "/api/sync" else "fb"):
+            return None
+        if path == "/api/sync":
+            r = APP.fold(uid, 2) or {"add": [], "episode": ""}
+            return self.send_json(200, {"memories": r["add"], "episode": r["episode"]})
+        if path == "/api/self/forget":
+            return self.send_json(200, {"ok": APP.mem.forget(uid, str(req.get("id", "")))})
+        if path == "/api/self/wipe":
+            APP.mem.wipe(uid)
+            return self.send_json(200, {"ok": True})
+        notes = req.get("notes") if isinstance(req.get("notes"), list) else []
+        return self.send_json(200, {"imported": APP.mem.import_notes(uid, notes)})
+
+    def handle_fb(self, path):
+        """Body: {p, mid, v: 1|-1|0, reply, user}. Logged for distilling upvoted replies."""
+        try:
+            req = self.read_json(8192)
+            pid, v = str(req.get("p", "")), int(req.get("v", 0))
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        if pid not in PERSONAS or v not in (-1, 0, 1):
+            return self.send_json(400, {"error": "bad request"})
+        if self.limited("fb"):
+            return None
+        APP.log_feedback({"ip": self.client_ip(), "p": pid, "mid": clip(req.get("mid"), 40), "v": v,
+                          "reply": clip(req.get("reply"), 600), "user": clip(req.get("user"), 300)})
+        return self.send_json(200, {"ok": True})
+
+    def handle_tts(self, path):
+        """Body: {v, cps, p, t} -> audio/mpeg."""
+        try:
+            req = self.read_json(16384)
             voice = str(req.get("v", ""))
             text = EMOJI.sub("", str(req.get("t", ""))).strip()
             persona = str(req.get("p", ""))
@@ -729,8 +751,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(413, {"error": "text too long"})
         if not (2.0 <= cps <= 10.0):
             return self.send_json(400, {"error": "cps out of range"})
-        if not APP.allow_ip(self.client_ip()):
-            return self.send_json(429, {"error": "too many requests"})
+        if self.limited("tts"):
+            return None
         t0 = time.time()
         try:
             audio, speed, cached = APP.speak(text, voice, cps, persona)
@@ -738,78 +760,9 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("tts error voice=%s %s\n" % (voice, e))
             code = 429 if e.code in ("DailyCap", "LimitExceeded.AccessLimit") else 502
             return self.send_json(code, {"error": e.code, "message": e.message})
-        ms = int((time.time() - t0) * 1000)
-        self.send_audio(audio, speed, cached, ms)
+        self.send_audio(audio, speed, cached, int((time.time() - t0) * 1000))
 
-    def handle_chat(self, path):
-        try:
-            req = self.read_json(48000)
-        except (ValueError, TypeError):
-            return self.send_json(400, {"error": "bad request"})
-        if not APP.allow_ip(self.client_ip(), "chat"):
-            return self.send_json(429, {"error": "too many requests"})
-        try:
-            if path == "/api/memo":
-                return self.send_json(200, {"memories": APP.memo(req)})
-            pid = str(req.get("p", ""))
-            if pid not in PERSONAS:
-                return self.send_json(400, {"error": "unknown persona"})
-            if path == "/api/card":
-                return self.send_json(200, {"text": APP.card_opening(pid, req, self.client_ip())})
-            if path == "/api/closing":
-                text, model, ms = APP.closing(pid, req, self.client_ip())
-                return self.send_json(200, {"text": text, "model": model, "ms": ms})
-            reply, model, ms = APP.chat(pid, req, self.client_ip())
-        except ValueError as e:
-            return self.send_json(400, {"error": str(e)})
-        except LLMError as e:
-            sys.stderr.write("chat error %s\n" % e)
-            return self.send_json(429 if str(e) == "DailyCap" else 502, {"error": str(e)[:120]})
-        return self.send_json(200, {"reply": reply, "model": model, "ms": ms})
-
-    def handle_self(self, path):
-        """Long-term memory: /api/sync folds the latest talk in (called when the user leaves a chat);
-        forget / wipe let the user delete what the selves know; import seeds from older local notes."""
-        try:
-            req = self.read_json(8192)
-        except (ValueError, TypeError):
-            return self.send_json(400, {"error": "bad request"})
-        uid = req.get("u")
-        if not valid_uid(uid):
-            return self.send_json(400, {"error": "bad user id"})
-        if not APP.allow_ip(self.client_ip(), "chat" if path == "/api/sync" else "fb"):
-            return self.send_json(429, {"error": "too many requests"})
-        try:
-            if path == "/api/sync":
-                r = APP._fold(uid, 2) or {"add": [], "episode": ""}
-                return self.send_json(200, {"memories": r["add"], "episode": r["episode"]})
-            if path == "/api/self/forget":
-                return self.send_json(200, {"ok": APP.mem.forget(uid, str(req.get("id", "")))})
-            if path == "/api/self/wipe":
-                APP.mem.wipe(uid)
-                return self.send_json(200, {"ok": True})
-            notes = req.get("notes") if isinstance(req.get("notes"), list) else []
-            return self.send_json(200, {"imported": APP.mem.import_notes(uid, notes)})
-        except LLMError as e:
-            return self.send_json(429 if str(e) == "DailyCap" else 502, {"error": str(e)[:120]})
-
-    def handle_fb(self):
-        """Body: {p, mid, v: 1|-1|0, reply, user}. Logged for distilling upvoted replies."""
-        try:
-            req = self.read_json(8192)
-            pid, v = str(req.get("p", "")), int(req.get("v", 0))
-        except (ValueError, TypeError):
-            return self.send_json(400, {"error": "bad request"})
-        if pid not in PERSONAS or v not in (-1, 0, 1):
-            return self.send_json(400, {"error": "bad request"})
-        if not APP.allow_ip(self.client_ip(), "fb"):
-            return self.send_json(429, {"error": "too many requests"})
-        APP.log_feedback({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": self.client_ip(), "p": pid,
-                          "mid": clip(req.get("mid"), 40), "v": v, "reply": clip(req.get("reply"), 600),
-                          "user": clip(req.get("user"), 300)})
-        return self.send_json(200, {"ok": True})
-
-    def handle_asr(self):
+    def handle_asr(self, path):
         """Body: a 16 kHz mono 16-bit WAV recorded in the page. The audio is not stored."""
         n = int(self.headers.get("Content-Length") or 0)
         if n <= 44 or n > ASR_MAX_BYTES:
@@ -820,8 +773,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": "not a wav"})
         if secs < 0.3 or secs > 61:
             return self.send_json(400, {"error": "bad duration"})
-        if not APP.allow_ip(self.client_ip(), "asr"):
-            return self.send_json(429, {"error": "too many requests"})
+        if self.limited("asr"):
+            return None
         if not APP._bump("asr_calls", 1, ASR_DAILY):
             return self.send_json(429, {"error": "DailyCap"})
         t0 = time.time()
