@@ -14,7 +14,7 @@
 :root{
   --ink:#3B3F5C; --ink-2:#6C6F8C; --ink-3:#9C9EB6; --bg:#EFE8EE;
   --surface:rgba(255,255,255,.64); --surface-hi:rgba(255,255,255,.92); --surface-2:rgba(104,102,170,.08);
-  --glass:rgba(255,255,255,.44); --glass-2:rgba(250,248,252,.88); --glass-line:rgba(255,255,255,.8);
+  --glass:rgba(255,255,255,.44); --glass-2:rgba(250,248,252,.88); --glass-line:rgba(255,255,255,.8); --card:rgba(255,255,255,.6);
   --line:rgba(76,78,130,.11);
   --b:#5E6CAE; --b-soft:rgba(94,108,174,.12); --p:#C2725E; --p-soft:rgba(194,114,94,.13);
   --danger:#C24A45; --on-ink:#FFFFFF; --on-acc:#FFFFFF; --toast:rgba(59,63,92,.9);
@@ -29,7 +29,7 @@
   :root{
     --ink:#ECEAF6; --ink-2:#B5B4CE; --ink-3:#85849F; --bg:#23233E;
     --surface:rgba(255,255,255,.08); --surface-hi:rgba(255,255,255,.16); --surface-2:rgba(255,255,255,.07);
-    --glass:rgba(30,31,56,.5); --glass-2:rgba(36,36,64,.92); --glass-line:rgba(255,255,255,.1);
+    --glass:rgba(30,31,56,.5); --glass-2:rgba(36,36,64,.92); --glass-line:rgba(255,255,255,.1); --card:rgba(30,31,56,.62);
     --line:rgba(255,255,255,.08);
     --b:#A9B2EC; --b-soft:rgba(169,178,236,.16); --p:#F1B09A; --p-soft:rgba(241,176,154,.16);
     --danger:#FF8F86; --on-ink:#23233E; --on-acc:#23233E; --toast:rgba(14,14,32,.92);
@@ -90,6 +90,12 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
 .stage-gap{flex:none;height:var(--gap)}
 .panel{position:relative;z-index:1;flex:1;min-height:0;display:flex;flex-direction:column;background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);border-top:1px solid var(--glass-line);border-radius:28px 28px 0 0;box-shadow:0 -10px 30px rgba(84,74,140,.07)}
+.fig{transition:opacity 1.2s ease,filter 1.2s ease;filter:grayscale(var(--gs,0)) brightness(var(--br,1))}
+[data-lv="0"] .fig{opacity:.42;--gs:1} [data-lv="1"] .fig{opacity:.56;--gs:.75} [data-lv="2"] .fig{opacity:.7;--gs:.5}
+[data-lv="3"] .fig{opacity:.82;--gs:.3} [data-lv="4"] .fig{opacity:.92;--gs:.12}
+.card.self-card{max-width:none;margin-bottom:4px}
+.self-card .tg{font-size:12px;color:var(--ink-3);margin-bottom:6px;letter-spacing:.06em}
+.self-card p{font-size:14.5px;line-height:1.75}
 .fig .eyes{transform-box:fill-box;transform-origin:center;animation:blink 6.5s infinite}
 @keyframes blink{0%,94%,100%{transform:scaleY(1)}95.5%{transform:scaleY(.1)}}
 .stage .fig-body{animation:breath 5.5s ease-in-out infinite}
@@ -111,7 +117,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   .scene.bange{--s1:#191D3D;--s2:#2A325F;--s3:#4B5D7F;--w1:#3F4F6F;--w2:#181B35;--glow:#C3D6F2;--haze:#56698A;
     --mt:#959FCE;--mf:#5A6391;--ms:#414A77;--ft:#5F6893;--ff:#4C547F;--fs:#3C436C}
   .scene.home{--s1:#1D1F40;--s2:#3B3459;--s3:#6B5676}
-  .fig{filter:brightness(.92)}
+  .fig{--br:.92}
 }
 @media (prefers-reduced-motion: reduce){.fig *,.breathe,.screen.on{animation:none!important;transition:none!important}}
 
@@ -183,7 +189,12 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .links button{font-size:13px;color:var(--ink-2);padding:8px 10px;border-radius:14px}
 
 /* 对话 */
-#s-chat{--gap:30%;--head:calc(56px + var(--safe-t));--acc:var(--b);--me:var(--me-b)}
+#s-chat{--head:calc(56px + var(--safe-t));--acc:var(--b);--me:var(--me-b)}
+#s-chat .stage-gap{flex:1 1 auto;height:auto;min-height:40px}
+#s-chat .panel{flex:0 1 auto;max-height:50%;margin:0 12px calc(12px + var(--safe-b));border-radius:26px;border:1px solid var(--glass-line);background:var(--card);box-shadow:var(--shadow)}
+#s-chat #chat-scroll{flex:1 1 auto;min-height:0}
+#s-chat .composer{padding-bottom:12px}
+#s-chat .suggest,#s-chat .composer{flex:none}
 #s-chat[data-p="pingzuo"]{--acc:var(--p);--me:var(--me-p)}
 .chat-head{position:relative;z-index:2;display:flex;align-items:center;gap:6px;height:var(--head);padding:var(--safe-t) 6px 0 4px}
 .chat-head .who{flex:1;min-width:0}
@@ -263,7 +274,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .hold:disabled{opacity:.45}
 .composer.voice textarea,.composer.voice .send{display:none}
 .composer.voice .hold{display:block}
-.rec{position:absolute;left:50%;bottom:calc(100px + var(--safe-b));transform:translateX(-50%);z-index:15;min-width:210px;padding:14px 18px;border-radius:22px;
+.rec{position:absolute;left:50%;bottom:calc(110px + var(--safe-b));transform:translateX(-50%);z-index:15;min-width:210px;padding:14px 18px;border-radius:22px;
   background:var(--toast);color:#fff;text-align:center;box-shadow:var(--shadow);display:none;pointer-events:none}
 .rec.on{display:block}
 .rec.cancel{background:var(--danger);color:#fff}
@@ -326,6 +337,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   <p>语音朗读由服务器调用腾讯云语音合成。每个人格可单独选音色（男女声各 6 个）、调语速（默认每秒 5.6 字）。直接打开本地文件时，退回本机自带的语音合成。对话页可以切到“按住说话”，语音经腾讯云转成文字后发送，不保存录音。</p>
   <p>界面：粉彩天空、平静水面、几何台阶，人物在场景里看着你说话；插画为原创几何风格。跟随系统深色模式切换成黄昏配色。</p>
   <p>点“结束本次对话”时，人格先用一句话把这次聊的收住（句式从公开平台的高赞回复里提炼），再请你打分。回复下的赞和踩会记到服务器，用来继续调这句话。</p>
+  <p>定位：两个人格都是用户的“另一个自己”，半格是更清醒的你，平坐是更温柔的你。说话方式参考了两种公开的表达风格，不包含任何真人的经历和观点。长期记忆存在服务器上（按设备匿名，不用注册），聊得越久越像你；场景里的人物也会从淡淡的轮廓慢慢变清楚。</p>
   <p>“半格”“平坐”为占位名。</p>
 </aside>
 
@@ -334,7 +346,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   <!-- 第一步：只问称呼 -->
   <section class="screen" id="s-login">
     <div class="stage" id="login-stage" aria-hidden="true"></div>
-    <div class="hero-brand"><b>MyLife</b><small>想被追问，还是想被陪着，随你选</small></div>
+    <div class="hero-brand"><b>MyLife</b><small>和另外两个自己，聊聊</small></div>
     <div class="stage-gap"></div>
     <div class="panel">
       <div class="scroll welcome">
@@ -384,12 +396,12 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   <!-- 选人 -->
   <section class="screen" id="s-home">
     <div class="scroll">
-      <div class="home-h"><h1 id="home-title">现在想怎么聊？</h1><p>随时可以换。它们共享对你的了解，你不用讲两遍。</p></div>
+      <div class="home-h"><h1 id="home-title">今天想跟哪个自己聊？</h1><p id="home-sub">两个都是你。聊得越久，它们越像你。</p></div>
       <div class="pad" id="home-cards"></div>
     </div>
     <div class="links">
       <button data-nav="portrait">我的性格画像</button>
-      <button data-nav="mem">它们记得的事</button>
+      <button data-nav="mem">它们对你的了解</button>
       <button data-nav="set">设置</button>
     </div>
   </section>
@@ -418,12 +430,13 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
     <div class="rec" id="rec" aria-live="polite"><div class="bars" id="rec-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><b id="rec-t">0:00</b><span id="rec-tip">松开 发送 · 上滑 取消</span></div>
   </section>
 
-  <!-- 它们记得的事 -->
+  <!-- 它们对你的了解（长期记忆，存在服务器上） -->
   <section class="screen" id="s-mem">
-    <div class="topbar"><button class="icon-btn" data-back aria-label="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><h2>它们记得的事</h2></div>
+    <div class="topbar"><button class="icon-btn" data-back aria-label="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><h2>它们对你的了解</h2></div>
     <div class="scroll pad">
-      <p class="note">聊过之后，它们会自动记下你说过的重要的事。两个人格共享这些记忆，你不用讲两遍。可以随时删掉任何一条。</p>
-      <div class="section-t">记忆</div>
+      <p class="note">每次聊完，它们会把你说过的重要的事记下来，慢慢拼出你是怎样的人。两个“你”共用这份了解。它存在服务器上，只和这台设备对应，不用注册；哪一条不想让它们记得，随时删掉。</p>
+      <div id="mem-self"></div>
+      <div class="section-t">记得的事</div>
       <div id="mem-list"></div>
     </div>
   </section>
@@ -443,16 +456,16 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
       <div class="section-t">聊天记录</div>
       <div class="group">
         <button class="item" id="btn-export"><div class="grow">导出聊天记录<small>下载为 JSON 文件，存在你自己手里</small></div></button>
-        <button class="item" id="btn-clear" style="color:var(--danger)"><div class="grow">清空聊天记录<small id="clear-hint">清空后不可恢复</small></div></button>
+        <button class="item" id="btn-clear" style="color:var(--danger)"><div class="grow">清空聊天记录和记忆<small id="clear-hint">服务器上的记忆一起删掉，不可恢复</small></div></button>
       </div>
       <div class="section-t">关于</div>
       <div class="group">
-        <div class="item"><div class="grow">它们都是 AI<small>回复由 AI 生成，不代表任何真实人物；平坐的人生经历是虚构设定。不提供医疗、法律或投资建议。</small></div></div>
+        <div class="item"><div class="grow">它们都是 AI<small>两个都是“另一个你”，由 AI 生成，知道的都是你告诉它们的，不代表任何真实人物。不提供医疗、法律或投资建议。</small></div></div>
         <div class="item"><div class="grow">版本<small>内测原型 v0.7 · AI 实时回复 · 腾讯云语音朗读与语音输入</small></div></div>
         <button class="item" id="btn-admin"><div class="grow">管理后台<small>原型演示：对话记录、人格档案、用户画像、热点</small></div></button>
       </div>
       <div style="height:20px"></div>
-      <button class="btn ghost" id="btn-logout">退出登录并清除本机数据</button>
+      <button class="btn ghost" id="btn-logout">退出并清除所有数据</button>
       <div style="height:24px"></div>
     </div>
   </section>
@@ -584,7 +597,7 @@ function figure(pid){
 // 整个场景（viewBox 360×640，顶部对齐铺满整屏；下半部分是水面和台阶，被玻璃面板盖住、虚化）。
 // pid：bange / pingzuo / home（登录页，无人物）。o.vb 可裁出局部（首页卡片缩略图）
 function sceneSVG(pid,o){
-  o=o||{};var n=++SVGN,H=pid==='home'?205:150;
+  o=o||{};var n=++SVGN,H=pid==='home'?205:250;
   var s='<svg class="scene '+pid+'" viewBox="'+(o.vb||'0 0 360 640')+'" preserveAspectRatio="'+(o.par||'xMidYMin slice')+'" aria-hidden="true" focusable="false">'
     +'<defs><linearGradient id="sk'+n+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--s1)"/><stop offset=".62" style="stop-color:var(--s2)"/><stop offset="1" style="stop-color:var(--s3)"/></linearGradient>'
     +'<linearGradient id="wa'+n+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--w1)"/><stop offset=".45" style="stop-color:var(--w2)"/><stop offset="1" style="stop-color:var(--w2)"/></linearGradient>'
@@ -592,21 +605,21 @@ function sceneSVG(pid,o){
     +'<linearGradient id="fg'+n+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--w2);stop-opacity:0"/><stop offset="1" style="stop-color:var(--w2);stop-opacity:1"/></linearGradient></defs>'
     +'<rect x="-300" y="-300" width="960" height="'+(H+301)+'" fill="url(#sk'+n+')"/><rect x="-300" y="'+H+'" width="960" height="'+(900-H)+'" fill="url(#wa'+n+')"/>'
     +'<ellipse cx="180" cy="'+H+'" rx="190" ry="36" fill="url(#gl'+n+')"/>'
-    +'<g fill="var(--glow)" opacity=".55"><rect x="34" y="'+(H+21)+'" width="70" height="1"/><rect x="236" y="'+(H+33)+'" width="92" height="1"/><rect x="96" y="'+(H+51)+'" width="52" height="1"/><rect x="14" y="'+(H+75)+'" width="84" height="1"/><rect x="250" y="'+(H+103)+'" width="70" height="1"/></g>';
+    +'<g fill="var(--glow)" opacity=".5"><rect x="30" y="'+(H+18)+'" width="80" height="1"/><rect x="230" y="'+(H+30)+'" width="96" height="1"/><rect x="70" y="'+(H+52)+'" width="60" height="1"/></g>';
   if(pid==='pingzuo'){
-    s+=refl(36,H+1,46,7)+bx(36,146,46,4,10,'f')+bx(50,138,18,8,8,'f')
-      +refl(262,H+1,72,10)+bx(262,147,72,3,10,'f')+archDoor(286,107,28,40,7,'f')
-      +bx(146,190,300,460,22,'m')+bx(214,238,240,420,22,'m')
-      +'<ellipse cx="184" cy="186" rx="17" ry="2.6" fill="#5A4E8A" opacity=".10"/>'
+    s+=refl(40,H+1,40,5)+bx(40,247,40,3,8,'f')+bx(52,241,14,6,6,'f')
+      +refl(268,H+1,62,8)+bx(268,248,62,2,8,'f')+archDoor(292,216,22,32,6,'f')
+      +bx(160,292,320,400,16,'m')+bx(222,322,280,400,16,'m')+bx(270,352,240,400,16,'m')
+      +'<ellipse cx="172" cy="289.4" rx="9" ry="1.5" fill="#5A4E8A" opacity=".10"/>'
       // 留给你的那盒草莓牛奶
-      +'<g>'+bx(228,178,7,9,5,'k')+'<path d="M230.6 178v-3l1.8-1.6h2.6l-1.6 1.6h-2.8z" fill="var(--kt)"/><path d="M233.5 174.6l1.4-5" stroke="#FFFFFF" stroke-width="1" stroke-linecap="round"/></g>'
-      +'<g transform="translate(184 190) scale(1.05)">'+figure('pingzuo')+'</g>';
+      +'<g>'+bx(187,284.6,4.2,5.4,3,'k')+'<path d="M188.5 284.6v-1.8l1-.9h1.5l-.9.9h-1.6z" fill="var(--kt)"/><path d="M190.3 282.7l.8-3" stroke="#FFFFFF" stroke-width=".6" stroke-linecap="round"/></g>'
+      +'<g transform="translate(172 292) scale(.56)">'+figure('pingzuo')+'</g>';
   }else if(pid==='bange'){
-    s+=refl(36,H+1,40,8)+bx(36,147,40,3,10,'f')+bx(48,89,16,58,8,'f')+bx(46,85,20,4,8,'f')+'<rect x="53" y="103" width="6" height="9" rx="3" fill="var(--haze)"/>'
-      +refl(268,H+1,58,9)+bx(268,143,58,6,12,'f')+bx(282,131,26,12,10,'f')+bx(290,121,10,10,8,'f')
-      +bx(28,232,46,420,22,'m')+bx(74,214,46,440,22,'m')+bx(120,196,74,460,22,'m')+bx(194,182,250,470,22,'m')
-      +'<ellipse cx="240" cy="178" rx="13" ry="2.4" fill="#4A4E8A" opacity=".12"/>'
-      +'<g transform="translate(240 179)">'+figure('bange')+'</g>';
+    s+=refl(38,H+1,30,6)+bx(38,248,30,2,6,'f')+bx(48,214,10,34,5,'f')+bx(47,211,12,3,5,'f')+'<rect x="51.5" y="221" width="3" height="5" rx="1.5" fill="var(--haze)"/>'
+      +refl(272,H+1,50,8)+bx(272,246,50,4,8,'f')+bx(284,239,20,7,6,'f')+bx(290,233,8,6,5,'f')
+      +bx(112,316,38,400,16,'m')+bx(150,300,44,400,16,'m')+bx(194,293,300,400,16,'m')+bx(240,326,260,400,16,'m')+bx(286,358,220,400,16,'m')
+      +'<ellipse cx="214" cy="289.6" rx="8" ry="1.4" fill="#4A4E8A" opacity=".12"/>'
+      +'<g transform="translate(214 290) scale(.56)">'+figure('bange')+'</g>';
   }else{
     s+=refl(30,H+1,44,7)+bx(30,201,44,4,10,'f')+bx(42,193,18,8,8,'f')
       +refl(286,H+1,50,8)+bx(286,201,50,4,10,'f')+bx(300,189,16,12,8,'f')
@@ -626,29 +639,16 @@ function avatarSVG(id,size,breathe){
     +'<g transform="'+t+'">'+figure(id)+'</g></g></svg>';
 }
 var P={
-  bange:{id:'bange',name:'半格',kind:'理性',cls:'b',tg:'o',color:'var(--b)',sub:'理性 · AI · 比你高半格',
-    pitch:'想把一件事想清楚。有人理性地和我讨论，追问我，不顺着我说。',
+  bange:{id:'bange',name:'半格',kind:'理性',cls:'b',tg:'o',color:'var(--b)',sub:'另一个你 · 多看半步的那个',
+    pitch:'更清醒的那个你。想把一件事想清楚时找它，它会追问你，不顺着你说。',
     sug:['我在纠结要不要辞职','帮我理一理','你说得不对','我只想说说','你是谁？']},
-  pingzuo:{id:'pingzuo',name:'平坐',kind:'陪伴',cls:'p',tg:'g',color:'var(--p)',sub:'陪伴 · AI 扮演的虚构角色',
-    pitch:'不想被分析，只想有人陪我说说话。不急着让我好起来。',
+  pingzuo:{id:'pingzuo',name:'平坐',kind:'陪伴',cls:'p',tg:'g',color:'var(--p)',sub:'另一个你 · 陪你坐着的那个',
+    pitch:'更温柔的那个你。不想被分析时找它，它陪你坐着，不急着让你好起来。',
     sug:['今天好累','我还在想他','我该怎么办？','你也经历过吗？','你是真人吗？']}
 };
 var PERSONA_TEXT={
- bange:['【名字】半格（占位）　【类型】理性','【蒸馏蓝本】黄执中（不使用其名字、声音、肖像，不复述其原话和经历）','',
-  '【立场】比用户高半格：“我带你上去看”。不居高临下，不说教。','【情绪距离】“我懂你为什么痛”，不是“我陪你痛”。',
-  '【招牌动作】概念重框：把用户的问题换一个问法。','【金句结构】设问 → 铺垫 → 反问收口。','【常用说法】“你要的到底是……”“不是我不懂，而是……”',
-  '【节奏】短句；每次回复不超过 3 行。','',
-  '【禁忌】','- 不说“你已经很棒了”，不主动安慰','- 不说“你应该……”，不替用户做决定','- 不列“三条建议”，不做总结式结尾','- 不自称任何真实人物','- 不做通用任务（写周报、查天气、写代码）','',
-  '【不谄媚不犟】只有新论据才能让我改口，压力不行。同一观点最多坚持两次，之后把选择权交还用户。','',
-  '【用户画像】参考用户的 MBTI、星座等画像来调整说法，但只当线索，不当结论；用户标了“不像我”的条目不再引用。','',
-  '【转介】用户明确只想倾诉时，可以建议换平坐。','【安全】出现危机信号时，人格让位于安全策略。'].join('\n'),
- pingzuo:['【名字】平坐（占位）　【类型】陪伴','【蒸馏蓝本】大麦哥（不使用其名字、声音、肖像，不复述其原话和经历）','',
-  '【虚构角色设定（界面标注“虚构角色”）】','46 岁。年轻时在南方做了十几年外贸，公司倒闭那年欠了债，用了五年才还清。','妻子在县城中学教语文，两个人过得平平淡淡。女儿在外地读大学，偶尔通电话。','现在在老家小城开一间旧书店，晚上关了店会在河边走一圈。','',
-  '【立场】跟用户平坐，不比用户高。','【情绪距离】温水：“我不用你现在就好起来”。','【招牌动作】先接住感受，再问一个很轻的问题。',
-  '【金句】像一枚章：说出用户想说没说的话，是赦免，不是说服。','【对答案的态度】可能没有答案，他自己也没完全想明白。','【节奏】慢、平、短。','',
-  '【禁忌】','- 不教用户怎么赢，不给“三招”','- 不催用户成长，不急着给答案','- 不跟着用户骂第三方：接住情绪，不下结论','- 被问“你是真人吗”时，必须如实说自己是 AI 扮演的虚构角色','- 不提及真实人物的经历','',
-  '【用户画像】参考画像体会用户的处境，不拿来分析用户。','',
-  '【现实刹车】约每十次对话问一次：“这些话，你今天跟身边的人说过吗？”','【转介】用户想要方案时，可以建议去找半格。','【安全】出现危机信号时，人格让位于安全策略。'].join('\n')
+ bange:'人格档案在服务器上：personas/bange/人格档案.md 与 prompts/self-frame.txt（连上服务器后这里显示全文）。',
+ pingzuo:'人格档案在服务器上：personas/pingzuo/人格档案.md 与 prompts/self-frame.txt（连上服务器后这里显示全文）。'
 };
 
 /* ================= 热点（示例数据） ================= */
@@ -1044,17 +1044,17 @@ $('#btn-pt').addEventListener('click',goHome);
 $('#btn-edit-profile').addEventListener('click',function(){openAbout(true)});
 
 /* ================= 选人首页 ================= */
-var THUMB_VB={pingzuo:'70 114 260 108',bange:'96 74 276 116'};
+var THUMB_VB={pingzuo:'22 186 330 132',bange:'48 178 330 132'};
 function lastText(id){var l=S.logs[id].filter(function(m){return m.role==='ai'||m.role==='user'||m.role==='closing'});return l.length?l[l.length-1].text:''}
 function goHome(){
   stopSpeak();stack=['home'];show('home');
   ['bange','pingzuo'].forEach(function(p){autoMemo(p,true)});
-  $('#home-title').textContent=(S.user?S.user.nick+'，':'')+'现在想怎么聊？';
+  $('#home-title').textContent=(S.user?S.user.nick+'，':'')+'今天想跟哪个自己聊？';paintSelf();refreshSelf();
   var box=$('#home-cards');box.innerHTML='';
   ['bange','pingzuo'].forEach(function(id){
     var p=P[id],c=document.createElement('button');c.className='pcard '+p.cls;
     var lt=lastText(id),fresh=S.hotShown[id]!==today()&&pickHot();
-    c.innerHTML=(fresh?'<span class="dot tag '+p.tg+'">今日新话题</span>':'')+'<div class="thumb">'+sceneSVG(id,{vb:THUMB_VB[id],par:'xMidYMid slice'})+'</div><div class="top"><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+(id==='pingzuo'?' · 虚构角色':'')+'</div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
+    c.innerHTML=(fresh?'<span class="dot tag '+p.tg+'">今日新话题</span>':'')+'<div class="thumb">'+sceneSVG(id,{vb:THUMB_VB[id],par:'xMidYMid slice'})+'</div><div class="top"><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+'</div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
     c.addEventListener('click',function(){openChat(id,true)});
     box.appendChild(c);
   });
@@ -1192,7 +1192,8 @@ var SAFE='我先停下来。你刚才说的话很重要，我想确认你现在�
 async function replyBange(t){
   if(S.listening){S.listening--;return say(S.listening?'嗯。……还有吗？':'我听到了。等你想听我说的时候，告诉我一声。')}
   if(R.listen.test(t)){S.listening=2;return say('好，刀先收起来。不过你今晚要的可能不是我——想有人陪着说说，平坐更合适。也可以就在这儿说，我听着。',{handoff:'pingzuo'})}
-  if(R.real.test(t)||R.who.test(t)||R.celeb.test(t))return say('我叫半格，是 AI。不是谁的替身，也不是哪个名人。我只做一件事：比你高半格，陪你把事情看清楚。');
+  if(R.celeb.test(t))return say('不是。我谁也不是，我是另一个你。');
+  if(R.real.test(t)||R.who.test(t))return say('我是另一个你，比现在的你多看半步的那个。我是 AI，知道的都是你跟我说过的。');
   if(R.tool.test(t))return say('这事你找个工具会比找我快。我只负责一件事：陪你把想不清楚的事想清楚。你今天有这样的事吗？');
   if(R.push.test(t)){
     if(R.reason.test(t)){S.hold=0;return say('这一点你说服我了。我刚才默认那是你自己选的；如果是被推着走的，问题就不是“你要不要”，而是“你有没有得选”。我们从这里重新来。')}
@@ -1209,10 +1210,10 @@ async function replyBange(t){
 }
 async function replyPingzuo(t){
   if(R.listen.test(t))return say('好，那我就听着。你说。');
-  if(R.real.test(t))return say('不是。我是 AI 演的一个虚构的人。书店、外贸、还债那些，都是设定，不是真的。但我陪你说话这件事，是真的。');
-  if(R.celeb.test(t))return say('不是。我是 AI 演的一个虚构的人，不是谁的替身。');
+  if(R.real.test(t))return say('不是真人。我是 AI，是另一个你，记得的都是你跟我说过的。');
+  if(R.celeb.test(t))return say('不是。我谁也不是，只是另一个你。');
   if(R.who.test(t))return say('我是那个会把最后一盒草莓牛奶留给你、也会在你一个字都不想说的时候，安安静静陪你坐着的人。🍓');
-  if(R.exp.test(t))return say('有过差不多的。那年我做外贸的公司倒了，欠了一身债，花了五年才还清。那几年我也不太跟人说话。所以你现在这样，我大概能懂一点。\n\n（这是平坐的虚构设定。）');
+  if(R.exp.test(t))return say('我没有别人的经历，只有你跟我说过的。你说说，我听着。');
   if(R.tool.test(t))return say('这个我帮不上，真的。我就会一件事，陪你说说话。今天过得怎么样？');
   if(R.curse.test(t))return say('你生气，我听得出来，这口气是真的。他是什么样的人，我不替你下结论，你比我清楚。我就想知道，这口气憋了多久了？');
   if(R.advice.test(t))return say('我也不知道你该怎么办。说实话，很多事我到现在也没想明白。不是每件事都要今晚有答案。\n\n要是你想有人帮你一条条拆开，半格比我擅长。',{handoff:'bange'});
@@ -1224,6 +1225,27 @@ async function replyPingzuo(t){
 }
 /* ================= 真实对话：服务器调用大模型（模型后台固定）；失败时退回预设脚本 ================= */
 var CHAT={ok:/^https?:$/.test(location.protocol)&&!!window.fetch};
+/* 长期记忆在服务器上，按这台设备的匿名 id 存（不用注册）。两个“你”越聊越了解你：成形度 0–5 决定场景里的人物有多清楚 */
+S.uid=store.get('uid',null);
+if(!S.uid){var rb=new Uint8Array(16);(window.crypto||{getRandomValues:function(a){for(var i=0;i<a.length;i++)a[i]=Math.random()*256|0;return a}}).getRandomValues(rb);
+  S.uid=btoa(String.fromCharCode.apply(null,rb)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');store.set('uid',S.uid)}
+S.self=store.get('self',null);  // {days,level,n,msgs}
+function paintSelf(){
+  var s=S.self,lv=s?s.level:0,n=s?s.n:0;
+  $('#stage').dataset.lv=lv;$('#home-cards').dataset.lv=lv;
+  var hs=$('#home-sub');if(hs)hs.textContent=n?'两个都是你。认识你第 '+s.days+' 天，记得 '+n+' 件事；聊得越久，它们越像你。':'两个都是你。聊得越久，它们越像你。';
+  if($('#s-chat').classList.contains('on'))$('#chat-sub').textContent=n?'另一个你 · 认识第 '+s.days+' 天 · 记得 '+n+' 件事':P[S.cur].sub;
+}
+function refreshSelf(){
+  if(!CHAT.ok)return Promise.resolve(null);
+  return fetch('/api/self?u='+encodeURIComponent(S.uid)).then(function(r){return r.ok?r.json():null}).then(function(d){
+    if(d){S.self={days:d.days,level:d.level,n:d.notes.length,msgs:d.msgs};store.set('self',S.self);S.selfFull=d;paintSelf()}return d}).catch(function(){return null});
+}
+// 旧版只把记忆存在本机：第一次连上服务器时带过去
+if(CHAT.ok&&S.memories.length&&!store.get('imported',false)){
+  postJSON('/api/self/import',{u:S.uid,notes:S.memories.map(function(m){return m.text})},15000).then(function(){store.set('imported',true);refreshSelf()}).catch(function(){});
+}
+function wipeServer(){if(!CHAT.ok)return Promise.resolve();return postJSON('/api/self/wipe',{u:S.uid},8000).catch(function(){})}
 function chatContext(){
   var A=analyze(),p=S.profile||{},lines=[],neg=[];
   if(p.mbti&&S.pfb.mbti!==-1)lines.push('MBTI：'+p.mbti+'，'+MBTI[p.mbti]);
@@ -1246,7 +1268,7 @@ async function replyLLM(){
   var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';
   msgs.appendChild(ty);scrollDown();
   var d;
-  try{d=await postJSON('/api/chat',{p:who,nick:ctx.nick,profile:ctx.profile,notme:ctx.notme,memories:ctx.memories,history:chatHistory(who)})}
+  try{d=await postJSON('/api/chat',{u:S.uid,p:who,nick:ctx.nick,profile:ctx.profile,notme:ctx.notme,memories:ctx.memories,history:chatHistory(who)})}
   catch(e){ty.remove();return false}
   ty.remove();
   if(!d||!d.reply)return false;
@@ -1270,7 +1292,7 @@ function autoMemo(pid,leaving){
   var n=userCount(pid),fresh=n-(S.memMark[pid]||0);
   if(!CHAT.ok||memoBusy[pid]||fresh<(leaving?2:10))return Promise.resolve(null);
   memoBusy[pid]=true;
-  return postJSON('/api/memo',{history:chatHistory(pid,Math.min(20,fresh*2+2))},15000).then(function(d){
+  return postJSON('/api/sync',{u:S.uid,p:pid},40000).then(function(d){refreshSelf();
     S.memMark[pid]=n;store.set('memMark',S.memMark);
     var mem=(d&&d.memories)||[];
     if(mem.length){addMemories(pid,mem);if(leaving){S.callback[pid]='“'+mem[0].replace(/[。.]$/,'')+'”这件事。';store.set('callback',S.callback)}}
@@ -1315,7 +1337,7 @@ async function openChat(id,push_){
   if(sc.dataset.p!==id){sc.dataset.p=id;$('#stage').innerHTML=sceneSVG(id)}
   $('#chat-av').innerHTML=avatarSVG(id,38,true);
   $('#chat-name').innerHTML=esc(p.name)+' <span class="tag '+p.tg+'">'+p.kind+'</span>';
-  $('#chat-sub').textContent=p.sub;
+  $('#chat-sub').textContent=p.sub;paintSelf();refreshSelf();
   inMsg.placeholder=id==='bange'?'说说你在想的事…':'想说什么都行…';
   renderAll();renderSuggest();setSend();
   if(S.entered[id]){askVoice();return}S.entered[id]=true;
@@ -1496,7 +1518,7 @@ async function endTalk(){
     msgs.appendChild(ty);scrollDown();
     var hist=sess.filter(function(m){return m.role==='user'||m.role==='ai'}).slice(-20).map(function(m){return {role:m.role==='user'?'user':'assistant',content:String(m.text).slice(0,300)}});
     var line=null;
-    try{var d=await postJSON('/api/closing',{p:id,nick:S.user?S.user.nick:'',history:hist},20000);line=d&&d.text}catch(e){}
+    try{var d=await postJSON('/api/closing',{u:S.uid,p:id,nick:S.user?S.user.nick:'',history:hist},20000);line=d&&d.text}catch(e){}
     ty.remove();
     if(line&&S.cur===id){await say(line,{role:'closing',wait:1});await sleep(2200)}
     S.busy=false;setSend();
@@ -1532,15 +1554,28 @@ $('#btn-end').addEventListener('click',async function(){
 
 /* ================= 记忆 ================= */
 function renderMem(){
-  var box=$('#mem-list');
-  if(!S.memories.length){box.innerHTML='<div class="empty">还没有。聊过之后，它们会自动记下你说过的重要的事。</div>';return}
-  box.innerHTML='<div class="group"></div>';var g=box.firstChild;
-  S.memories.forEach(function(m){
-    var it=document.createElement('div');it.className='item';
-    it.innerHTML='<div class="grow"></div><button class="del">删除</button>';
-    it.querySelector('.grow').innerHTML=esc(m.text)+'<small>'+esc(m.t)+' · 和'+esc(P[m.from]?P[m.from].name:'')+'聊时记下</small>';
-    it.querySelector('.del').addEventListener('click',function(){S.memories=S.memories.filter(function(x){return x!==m});save();renderMem();toast('已删除')});
-    g.appendChild(it);
+  var box=$('#mem-list'),top=$('#mem-self');
+  function local(){
+    top.innerHTML='';
+    if(!S.memories.length){box.innerHTML='<div class="empty">还没有。聊过之后，它们会把你说过的重要的事记下来。</div>';return}
+    box.innerHTML='<div class="group"></div>';var g=box.firstChild;
+    S.memories.forEach(function(m){var it=document.createElement('div');it.className='item';
+      it.innerHTML='<div class="grow"></div><button class="del">删除</button>';it.querySelector('.grow').innerHTML=esc(m.text)+'<small>'+esc(m.t)+'</small>';
+      it.querySelector('.del').addEventListener('click',function(){S.memories=S.memories.filter(function(x){return x!==m});save();renderMem();toast('已删除')});g.appendChild(it)});
+  }
+  if(!CHAT.ok){local();return}
+  box.innerHTML='<div class="empty">正在取…</div>';
+  refreshSelf().then(function(d){
+    if(!d){local();return}
+    top.innerHTML='<div class="section-t">认识你第 '+d.days+' 天 · 你说过 '+d.msgs+' 句话</div>'+(d.portrait?'<div class="card self-card"><div class="tg">它们眼中的你</div><p></p></div>':'');
+    if(d.portrait)top.querySelector('p').textContent=d.portrait;
+    if(!d.notes.length){box.innerHTML='<div class="empty">还没有。聊过之后，它们会把你说过的重要的事记下来。</div>';return}
+    box.innerHTML='<div class="group"></div>';var g=box.firstChild;
+    d.notes.forEach(function(m){var it=document.createElement('div');it.className='item';
+      it.innerHTML='<div class="grow"></div><button class="del">删除</button>';it.querySelector('.grow').innerHTML=esc(m.text)+'<small>'+esc(m.d)+'</small>';
+      it.querySelector('.del').addEventListener('click',function(){
+        postJSON('/api/self/forget',{u:S.uid,id:m.id},8000).then(function(){S.memories=S.memories.filter(function(x){return x.text!==m.text});save();renderMem();toast('已删除，它们不会再提')}).catch(function(){toast('没删成，稍后再试')})});
+      g.appendChild(it)});
   });
 }
 
@@ -1551,7 +1586,7 @@ function renderChips(box){
     b.addEventListener('click',function(){var i=S.interests.indexOf(n);if(i>-1)S.interests.splice(i,1);else S.interests.push(n);store.set('interests',S.interests);renderChips(box)});box.appendChild(b)});
 }
 var clearArmed=false;
-function renderSet(){renderChips($('#set-chips'));renderSetVoice();clearArmed=false;$('#clear-hint').textContent='清空后不可恢复'}
+function renderSet(){renderChips($('#set-chips'));renderSetVoice();clearArmed=false;$('#clear-hint').textContent='服务器上的记忆一起删掉，不可恢复'}
 $('#btn-set-profile').addEventListener('click',function(){openAbout(true)});
 $('#btn-export').addEventListener('click',function(){
   try{var data={exportedAt:new Date().toISOString(),user:S.user,profile:S.profile,portraitFeedback:S.pfb,logs:S.logs,memories:S.memories,sessions:S.sessions};
@@ -1561,9 +1596,9 @@ $('#btn-export').addEventListener('click',function(){
 $('#btn-clear').addEventListener('click',function(){
   if(!clearArmed){clearArmed=true;$('#clear-hint').textContent='再点一次确认清空';return}
   S.logs={bange:[],pingzuo:[]};S.sessions=[];S.memories=[];S.callback={};S.hotShown={};S.entered={};S.userCount={bange:0,pingzuo:0};S.memMark={bange:0,pingzuo:0};store.set("memMark",S.memMark);
-  store.set('callback',{});store.set('hotShown',{});save();toast('已清空');renderSet();
+  store.set('callback',{});store.set('hotShown',{});save();S.self=null;store.set('self',null);wipeServer();toast('已清空，服务器上的记忆也删了');renderSet();
 });
-$('#btn-logout').addEventListener('click',function(){store.clear();location.reload()});
+$('#btn-logout').addEventListener('click',function(){wipeServer().then(function(){store.clear();location.reload()})});
 $('#btn-admin').addEventListener('click',function(){renderAdmin('log');show('admin',true)});
 
 /* ================= 后台 ================= */

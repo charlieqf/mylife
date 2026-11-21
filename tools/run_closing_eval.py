@@ -21,6 +21,7 @@ with open(os.path.join(ROOT, ".secrets", "mylife.env"), encoding="utf-8") as f:
             os.environ.setdefault(k, v)
 os.environ["MYLIFE_PERSONAS"] = os.path.join(ROOT, "personas")
 os.environ["MYLIFE_STYLE"] = os.path.join(ROOT, "prompts", "de-ai-style.txt")
+os.environ["MYLIFE_SELF_FRAME"] = os.path.join(ROOT, "prompts", "self-frame.txt")
 os.environ["MYLIFE_CLOSING_STYLE"] = os.path.join(ROOT, "prompts", "closing-style.txt")
 os.environ.setdefault("MYLIFE_CACHE", os.path.join(ROOT, ".eval-cache"))
 sys.path.insert(0, os.path.join(ROOT, "server"))

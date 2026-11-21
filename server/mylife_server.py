@@ -31,6 +31,8 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from memory import Memory, valid_uid
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOG_PATH = os.environ.get("MYLIFE_VOICES", os.path.join(HERE, "voices.json"))
 CACHE_DIR = os.environ.get("MYLIFE_CACHE", "/var/cache/mylife")
@@ -234,6 +236,7 @@ CHAT_FALLBACK = (os.environ.get("MYLIFE_CHAT_FALLBACK_ENDPOINT", "dashscope"),
 PERSONAS = {"bange": ("半格", "理性", "pingzuo"), "pingzuo": ("平坐", "陪伴", "bange")}
 PERSONA_DIR = os.environ.get("MYLIFE_PERSONAS", os.path.join(HERE, "personas"))
 STYLE_PATH = os.environ.get("MYLIFE_STYLE", os.path.join(HERE, "prompts", "de-ai-style.txt"))
+SELF_FRAME_PATH = os.environ.get("MYLIFE_SELF_FRAME", os.path.join(HERE, "prompts", "self-frame.txt"))
 OUTPUT_RULE = "只输出你要说的话本身：纯文本，不加引号，不加名字前缀，不写动作或旁白。"
 CHAT_PER_MIN = int(os.environ.get("MYLIFE_CHAT_PER_MIN", "20"))
 CHAT_DAILY = int(os.environ.get("MYLIFE_CHAT_DAILY", "3000"))
@@ -243,7 +246,6 @@ ASR_MAX_BYTES = 2_200_000  # 60 s of 16 kHz mono 16-bit is ~1.92 MB
 CHAT_LOG_DIR = os.path.join(CACHE_DIR, "chatlog")
 FEEDBACK_DIR = os.path.join(CACHE_DIR, "feedback")
 FB_PER_MIN = 60
-FICTION_HINT = re.compile(r"(我(的|那间|这间)?(书店|店里|店)|我(女儿|闺女|老婆|妻子|爱人)|我还债|我做外贸|我那几年|我年轻的时候)")
 # Same signals as the page's R.crisis plus a few softer ones; the page answers the explicit ones with a
 # fixed safety message before calling us, this is the net for whatever reaches the model.
 CRISIS = re.compile(r"(不想活|自杀|想死|轻生|结束生命|活着(好|真|太|也)?没(什么)?意思|活着没有意义|活着有什么意义"
@@ -253,9 +255,6 @@ SAFETY_LINE = "如果你有伤害自己的念头，请马上联系身边信任�
 
 def postprocess(pid, user_text, reply):
     reply = reply.strip().strip("“”\"")
-    # 平坐 talking about its own (fictional) life must carry the label (design doc D4).
-    if pid == "pingzuo" and FICTION_HINT.search(reply) and "虚构设定" not in reply:
-        reply += "（这是平坐的虚构设定。）"
     if CRISIS.search(user_text or "") and "12356" not in reply:
         reply += "\n\n" + SAFETY_LINE
     return reply
@@ -303,7 +302,8 @@ def persona_prompt(pid):
     """人格档案 + 风格示例（提示词部分）+ 去AI味风格块。每次读文件，改完部署即生效。"""
     pdir = os.path.join(PERSONA_DIR, pid)
     # HTML comments hold editorial notes (blueprint names, what to avoid); keep them out of the prompt.
-    parts = [re.sub(r"<!--.*?-->", "", _read(os.path.join(pdir, "人格档案.md")), flags=re.S).strip()]
+    parts = [re.sub(r"<!--.*?-->", "", _read(os.path.join(pdir, "人格档案.md")), flags=re.S).strip(),
+             _read(SELF_FRAME_PATH).strip()]
     m = re.search(r"<!-- prompt-examples:start -->(.*?)<!-- prompt-examples:end -->",
                   _read(os.path.join(pdir, "风格示例.md")), re.S)
     if m:
@@ -317,7 +317,7 @@ def clip(s, n):
     return s[:n]
 
 
-def build_messages(pid, req):
+def build_messages(pid, req, know=None):
     name, kind, other = PERSONAS[pid]
     oname, okind, _ = PERSONAS[other]
     ctx = ["【这位用户】", "称呼：%s" % (clip(req.get("nick"), 12) or "朋友")]
@@ -328,7 +328,9 @@ def build_messages(pid, req):
     if notme:
         ctx.append("用户标了“不像我”的画像条目（不要再拿这些说事）：" + notme)
     mems = [clip(x, 80) for x in (req.get("memories") or [])[:8] if str(x).strip()]
-    if mems:
+    if know:
+        ctx.append(know)
+    elif mems:
         ctx.append("【你们记得的事】（之前聊过的；需要时自然提起，不要列出来）\n" + "\n".join("- " + x for x in mems))
     ctx.append("【此刻】今天是 %s。用户正在和你（%s）聊。另一位是%s（%s）；当用户需要的东西%s更合适时，可以建议去找%s。"
                % (datetime.date.today().isoformat(), name, oname, okind, oname, oname))
@@ -403,6 +405,7 @@ class App:
             self.catalog = json.load(f)
         self.voices = {str(v["id"]): v for v in self.catalog["voices"]}
         self.pool = ThreadPoolExecutor(max_workers=6)
+        self.mem = Memory(os.path.join(CACHE_DIR, "users"), self._mem_llm)
         self.lock = threading.Lock()
         self.hits = {"tts": defaultdict(deque), "chat": defaultdict(deque), "asr": defaultdict(deque), "fb": defaultdict(deque)}
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -450,7 +453,10 @@ class App:
     def chat(self, pid, req, ip):
         if not self._bump("chat_calls", 1, CHAT_DAILY):
             raise LLMError("DailyCap")
-        msgs = build_messages(pid, req)
+        uid = req.get("u") if valid_uid(req.get("u")) else None
+        users = [clip(h.get("content"), 300) for h in (req.get("history") or [])[-6:] if h.get("role") == "user"]
+        know = self.mem.context(uid, " ".join(users[-3:])) if uid else None
+        msgs = build_messages(pid, req, know)
         t0 = time.time()
         used = CHAT_PRIMARY
         try:
@@ -466,7 +472,26 @@ class App:
         self.log_chat({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": ip, "p": pid,
                        "nick": clip(req.get("nick"), 12), "user": msgs[-1]["content"], "reply": reply,
                        "model": used[1], "ms": ms})
+        if uid:
+            pending = self.mem.append(uid, pid, [("user", users[-1] if users else msgs[-1]["content"]), ("ai", reply)])
+            if pending >= 8:
+                self.pool.submit(self._fold, uid, 8)
         return reply, used[1], ms
+
+    def _mem_llm(self, msgs, max_tokens, temperature):
+        if not self._bump("chat_calls", 1, CHAT_DAILY):
+            raise LLMError("DailyCap")
+        try:
+            return llm_call(CHAT_PRIMARY[0], CHAT_PRIMARY[1], msgs, max_tokens=max_tokens, temperature=temperature, timeout=40)
+        except LLMError:
+            return llm_call(CHAT_FALLBACK[0], CHAT_FALLBACK[1], msgs, max_tokens=max_tokens, temperature=temperature, timeout=40)
+
+    def _fold(self, uid, min_user):
+        try:
+            return self.mem.consolidate(uid, min_user)
+        except Exception as e:  # background work must never take the server down
+            sys.stderr.write("consolidate %s failed: %s\n" % (uid[:6], e))
+            return None
 
     def memo(self, req):
         if not self._bump("chat_calls", 1, CHAT_DAILY):
@@ -510,6 +535,9 @@ class App:
         if not text:
             raise LLMError("empty reply")
         text = postprocess(pid, said, text)
+        if valid_uid(req.get("u")):
+            self.mem.append(req["u"], pid, [("closing", text)])
+            self.pool.submit(self._fold, req["u"], 2)
         ms = int((time.time() - t0) * 1000)
         self.log_chat({"t": datetime.datetime.now().isoformat(timespec="seconds"), "ip": ip, "p": pid, "kind": "closing",
                        "nick": clip(req.get("nick"), 12), "user": said[-300:], "reply": text, "model": used[1], "ms": ms})
@@ -601,6 +629,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"ok": True})
         if path == "/api/voices":
             return self.send_json(200, APP.public_voices())
+        if path == "/api/self":
+            uid = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("u", "")
+            if not valid_uid(uid):
+                return self.send_json(400, {"error": "bad user id"})
+            if not APP.allow_ip(self.client_ip(), "fb"):
+                return self.send_json(429, {"error": "too many requests"})
+            return self.send_json(200, APP.mem.summary(uid))
         if path == "/api/persona":
             pid = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("p", "")
             if pid not in PERSONAS:
@@ -621,6 +656,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_chat(path)
         if path == "/api/fb":
             return self.handle_fb()
+        if path in ("/api/sync", "/api/self/forget", "/api/self/wipe", "/api/self/import"):
+            return self.handle_self(path)
         if path == "/api/asr":
             return self.handle_asr()
         if path != "/api/tts":
@@ -679,6 +716,32 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("chat error %s\n" % e)
             return self.send_json(429 if str(e) == "DailyCap" else 502, {"error": str(e)[:120]})
         return self.send_json(200, {"reply": reply, "model": model, "ms": ms})
+
+    def handle_self(self, path):
+        """Long-term memory: /api/sync folds the latest talk in (called when the user leaves a chat);
+        forget / wipe let the user delete what the selves know; import seeds from older local notes."""
+        try:
+            req = self.read_json(8192)
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        uid = req.get("u")
+        if not valid_uid(uid):
+            return self.send_json(400, {"error": "bad user id"})
+        if not APP.allow_ip(self.client_ip(), "chat" if path == "/api/sync" else "fb"):
+            return self.send_json(429, {"error": "too many requests"})
+        try:
+            if path == "/api/sync":
+                r = APP._fold(uid, 2) or {"add": [], "episode": ""}
+                return self.send_json(200, {"memories": r["add"], "episode": r["episode"]})
+            if path == "/api/self/forget":
+                return self.send_json(200, {"ok": APP.mem.forget(uid, str(req.get("id", "")))})
+            if path == "/api/self/wipe":
+                APP.mem.wipe(uid)
+                return self.send_json(200, {"ok": True})
+            notes = req.get("notes") if isinstance(req.get("notes"), list) else []
+            return self.send_json(200, {"imported": APP.mem.import_notes(uid, notes)})
+        except LLMError as e:
+            return self.send_json(429 if str(e) == "DailyCap" else 502, {"error": str(e)[:120]})
 
     def handle_fb(self):
         """Body: {p, mid, v: 1|-1|0, reply, user}. Logged for distilling upvoted replies."""
