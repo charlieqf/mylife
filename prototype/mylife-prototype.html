@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#F4F1EA" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141619" media="(prefers-color-scheme: dark)">
+<title>MyLife 内测原型</title>
+<style>
+:root{
+  --bg:#F4F1EA; --surface:#FFFFFF; --surface-2:#ECE7DC; --ink:#1F2328; --ink-2:#575D68; --ink-3:#8A8F98;
+  --line:#E0DACD; --orange:#C2560C; --orange-soft:rgba(194,86,12,.10); --green:#3F7A55; --green-soft:rgba(63,122,85,.11);
+  --user-bg:#1F2328; --user-ink:#F7F5F0; --danger:#B42318;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 8px 24px rgba(0,0,0,.06);
+  --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#141619; --surface:#1E2125; --surface-2:#282C31; --ink:#ECEAE4; --ink-2:#A8ADB5; --ink-3:#7A8089;
+    --line:#2F343A; --orange:#F08A3E; --orange-soft:rgba(240,138,62,.14); --green:#7CC495; --green-soft:rgba(124,196,149,.13);
+    --user-bg:#ECEAE4; --user-ink:#16181B; --danger:#FF7B6E;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.3);
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,textarea,select{font:inherit;color:inherit}
+.app{position:relative;width:100%;height:100dvh;max-width:440px;margin:0 auto;background:var(--bg);overflow:hidden}
+.desk-note{display:none}
+@media (min-width:700px){
+  body{display:flex;align-items:center;justify-content:center;gap:40px;background:var(--surface-2)}
+  .app{margin:0;height:min(880px,calc(100dvh - 48px));border-radius:36px;border:1px solid var(--line);box-shadow:var(--shadow)}
+  .desk-note{display:block;max-width:240px;color:var(--ink-2);font-size:13px}
+  .desk-note h1{font-size:18px;color:var(--ink);margin-bottom:8px}
+  .desk-note p{margin-bottom:8px}
+}
+.screen{position:absolute;inset:0;display:none;flex-direction:column;background:var(--bg)}
+.screen.on{display:flex}
+.scroll{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
+.pad{padding:16px}
+.foot{padding:12px 16px calc(14px + var(--safe-b));border-top:1px solid var(--line);background:var(--bg)}
+
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:48px;border-radius:14px;background:var(--ink);color:var(--bg);font-weight:600;width:100%}
+.btn:disabled{opacity:.35;cursor:default}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.field{display:block;width:100%;height:46px;border-radius:12px;border:1px solid var(--line);background:var(--surface);padding:0 12px;outline:none;font-size:16px;-webkit-appearance:none;appearance:none}
+select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3) 50%),linear-gradient(135deg,var(--ink-3) 50%,transparent 50%);background-position:calc(100% - 18px) 20px,calc(100% - 13px) 20px;background-size:5px 5px;background-repeat:no-repeat;padding-right:30px}
+.field:focus{border-color:var(--ink-3)}
+.label{display:flex;align-items:baseline;justify-content:space-between;font-size:13px;color:var(--ink-2);margin:14px 0 6px}
+.label em{font-style:normal;color:var(--ink-3);font-size:12px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.note{font-size:12.5px;color:var(--ink-2);background:var(--surface-2);border-radius:12px;padding:10px 12px;line-height:1.55}
+.tag{display:inline-flex;align-items:center;font-size:11px;line-height:1;padding:3px 6px;border-radius:6px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.tag.o{background:var(--orange-soft);color:var(--orange)}
+.tag.g{background:var(--green-soft);color:var(--green)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--line);background:var(--surface);font-size:13.5px;color:var(--ink-2)}
+.chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.topbar{display:flex;align-items:center;gap:8px;padding:calc(8px + var(--safe-t)) 10px 8px;border-bottom:1px solid var(--line);background:var(--bg)}
+.topbar h2{font-size:17px;font-weight:600;flex:1}
+.icon-btn{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--ink);flex:none}
+.icon-btn:active{background:var(--surface-2)}
+.icon-btn svg{width:22px;height:22px}
+.avatar{flex:none;border-radius:50%;display:block}
+.breathe{animation:breathe 4.5s ease-in-out infinite}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.045)}}
+
+/* 登录 */
+.brand{display:flex;align-items:center;gap:12px;margin:calc(12px + var(--safe-t)) 0 6px}
+.brand b{font-size:24px}
+.brand small{display:block;color:var(--ink-2);font-size:13px}
+.hint{font-size:13px;color:var(--ink-2);margin:10px 0 4px}
+.slots{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--ink-3)}
+.slots .chip{height:28px;font-size:12.5px;padding:0 10px}
+
+/* 画像 */
+.steps{padding:40px 24px;display:flex;flex-direction:column;gap:12px}
+.steps h3{font-size:18px;margin-bottom:8px}
+.step{display:flex;align-items:center;gap:10px;font-size:14.5px;color:var(--ink-3);opacity:0;transform:translateY(4px);transition:all .25s}
+.step.on{opacity:1;transform:none;color:var(--ink)}
+.step i{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--line);flex:none;display:flex;align-items:center;justify-content:center;font-style:normal;font-size:11px}
+.step.done i{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.portrait h3{font-size:20px;margin:4px 0 6px}
+.portrait .sum{font-size:15.5px;line-height:1.7;margin:4px 0 12px}
+.kw{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.kw span{font-size:13px;padding:4px 10px;border-radius:14px;background:var(--ink);color:var(--bg)}
+.pi{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.pi .h{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.pi .h b{font-size:14px;flex:1}
+.pi p{font-size:14px;color:var(--ink-2);line-height:1.6}
+.pi.miss p{color:var(--ink-3)}
+.yn{display:flex;gap:6px;margin-top:8px}
+.yn button{height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--line);font-size:12.5px;color:var(--ink-2)}
+.yn button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+
+/* 选人 */
+.home-h{padding:calc(24px + var(--safe-t)) 20px 8px}
+.home-h h1{font-size:24px;line-height:1.35}
+.home-h p{color:var(--ink-2);font-size:14px;margin-top:4px}
+.pcard{display:block;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:18px;margin-bottom:14px;position:relative;box-shadow:var(--shadow)}
+.pcard:active{transform:scale(.99)}
+.pcard .top{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.pcard .kind{font-size:22px;font-weight:700;line-height:1.2}
+.pcard .nm{font-size:13px;color:var(--ink-3)}
+.pcard .pitch{font-size:15px;line-height:1.6}
+.pcard .last{margin-top:10px;font-size:12.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcard .dot{position:absolute;top:18px;right:18px;font-size:11.5px;padding:3px 8px;border-radius:10px}
+.pcard.b{border-top:3px solid var(--orange)} .pcard.p{border-top:3px solid var(--green)}
+.pcard.b .kind{color:var(--orange)} .pcard.p .kind{color:var(--green)}
+.links{display:flex;justify-content:center;gap:4px;padding:4px 0 calc(16px + var(--safe-b));flex-wrap:wrap}
+.links button{font-size:13px;color:var(--ink-2);padding:8px 10px;border-radius:10px}
+
+/* 对话 */
+.chat-head{display:flex;align-items:center;gap:8px;padding:calc(8px + var(--safe-t)) 6px 8px 4px;border-bottom:1px solid var(--line);background:var(--bg)}
+.chat-head .who{flex:1;min-width:0}
+.chat-head .who b{font-size:16px;display:flex;align-items:center;gap:6px}
+.chat-head .who small{display:block;color:var(--ink-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msgs{padding:12px 14px;display:flex;flex-direction:column;gap:12px}
+.row{display:flex;flex-direction:column;max-width:100%}
+.row.me{align-items:flex-end}
+.bubble{max-width:84%;padding:10px 13px;border-radius:18px;white-space:pre-wrap;word-break:break-word;font-size:15.5px;line-height:1.62}
+.row.ai .bubble{background:var(--surface);border:1px solid var(--line);border-top-left-radius:6px}
+.row.me .bubble{background:var(--user-bg);color:var(--user-ink);border-top-right-radius:6px}
+.fb{display:flex;gap:2px;margin:3px 0 0 4px;align-items:center}
+.fb button{width:30px;height:26px;border-radius:8px;color:var(--ink-3);display:flex;align-items:center;justify-content:center}
+.fb button svg{width:15px;height:15px}
+.fb button.on{color:var(--ink);background:var(--surface-2)}
+.handoff{margin:6px 0 0 2px;height:32px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;align-self:flex-start}
+.fb .spk.on{color:var(--ink);background:var(--surface-2)}
+.row.ai.speaking .bubble{border-color:var(--ink-3)}
+.vbtn.off{color:var(--ink-3)}
+.seg2{display:flex;padding:3px;border-radius:12px;background:var(--surface-2);margin-bottom:16px}
+.seg2 button{flex:1;height:36px;border-radius:9px;font-size:14px;color:var(--ink-2)}
+.seg2 button.on{background:var(--surface);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.range-row{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.range-row input{flex:1;accent-color:var(--ink)}
+.range-row b{font-size:15px;min-width:76px;text-align:right}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line);margin-top:12px;font-size:15px}
+.switch-row input{width:22px;height:22px;accent-color:var(--ink);flex:none}
+.sub-t{font-size:13px;color:var(--ink-2);margin-bottom:8px}
+.divider{align-self:center;font-size:12px;color:var(--ink-3);padding:2px 10px;border-radius:10px;background:var(--surface-2)}
+.typing{display:inline-flex;gap:4px;padding:14px!important}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--ink-3);animation:dot 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes dot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 14px;max-width:92%}
+.hot .tg{font-size:12px;font-weight:600;margin-bottom:4px}
+.hot h4{font-size:15px;line-height:1.45;margin-bottom:4px}
+.hot p{font-size:13px;color:var(--ink-2)}
+.hot .meta{display:flex;align-items:center;justify-content:space-between;margin-top:10px;gap:8px}
+.hot .meta a{font-size:12px;color:var(--ink-3)}
+.hot .go{height:32px;padding:0 14px;border-radius:10px;background:var(--ink);color:var(--bg);font-size:13px;font-weight:600}
+.hot .go:disabled{opacity:.35}
+.safety{border:1px solid var(--line);background:var(--surface)}
+.safety .t{font-size:12px;font-weight:700;color:var(--danger);margin-bottom:4px}
+.safety p{white-space:pre-wrap}
+.suggest{display:flex;gap:8px;overflow-x:auto;padding:8px 14px 0;scrollbar-width:none}
+.suggest::-webkit-scrollbar{display:none}
+.suggest button{flex:none;height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--line);background:var(--surface);font-size:13px;color:var(--ink-2);white-space:nowrap}
+.composer{display:flex;align-items:flex-end;gap:8px;padding:8px 10px calc(10px + var(--safe-b));background:var(--bg)}
+.composer textarea{flex:1;min-height:42px;max-height:120px;resize:none;border-radius:21px;border:1px solid var(--line);background:var(--surface);padding:9px 14px;outline:none;font-size:16px;line-height:1.45}
+.composer .icon-btn{width:42px;height:42px;border-radius:21px}
+.send{background:var(--ink);color:var(--bg)!important}
+.send:disabled{opacity:.3}
+.mic{color:var(--ink-3)!important}
+
+/* 弹层 */
+.mask{position:absolute;inset:0;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .2s;z-index:20}
+.mask.on{opacity:1;pointer-events:auto}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--surface);border-radius:22px 22px 0 0;padding:8px 16px calc(16px + var(--safe-b));transform:translateY(105%);transition:transform .25s ease;z-index:21;max-height:86%;overflow-y:auto}
+.sheet.on{transform:none}
+.grab{width:36px;height:4px;border-radius:2px;background:var(--line);margin:4px auto 12px}
+.sheet h3{font-size:17px;margin-bottom:4px}
+.sheet .desc{font-size:13px;color:var(--ink-2);margin-bottom:14px}
+.menu-item{display:flex;align-items:center;gap:12px;width:100%;height:52px;padding:0 4px;border-bottom:1px solid var(--line);font-size:15.5px;text-align:left}
+.menu-item:last-child{border-bottom:0}
+.menu-item small{color:var(--ink-3);font-size:12px;margin-left:auto}
+.rate{display:flex;gap:6px;margin-bottom:12px}
+.rate button{flex:1;padding:10px 0 8px;border-radius:12px;border:1px solid var(--line);font-size:12px;color:var(--ink-2);display:flex;flex-direction:column;align-items:center;gap:4px}
+.rate button b{font-size:20px;line-height:1}
+.rate button.on{border-color:var(--ink);background:var(--surface-2);color:var(--ink)}
+.sheet textarea{width:100%;min-height:72px;border-radius:12px;border:1px solid var(--line);background:var(--bg);padding:10px 12px;outline:none;resize:none;margin-bottom:12px;font-size:15px}
+
+/* 列表页 */
+.section-t{font-size:12.5px;color:var(--ink-3);margin:18px 2px 8px}
+.group{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.item{display:flex;align-items:center;gap:10px;padding:13px 14px;border-bottom:1px solid var(--line);font-size:15px;width:100%;text-align:left}
+.item:last-child{border-bottom:0}
+.item .grow{flex:1;min-width:0}
+.item small{display:block;color:var(--ink-3);font-size:12px;margin-top:2px}
+.del{font-size:13px;color:var(--danger);padding:6px 8px;border-radius:8px;flex:none}
+.empty{text-align:center;color:var(--ink-3);font-size:14px;padding:40px 20px}
+.tabs{display:flex;gap:6px;padding:10px 14px;border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs button{height:32px;padding:0 12px;border-radius:10px;font-size:13.5px;color:var(--ink-2);flex:none}
+.tabs button.on{background:var(--ink);color:var(--bg)}
+.stat{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stat div{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 4px;text-align:center}
+.stat b{display:block;font-size:20px}
+.stat span{font-size:11.5px;color:var(--ink-3)}
+.log-line{font-size:13px;padding:8px 12px;border-bottom:1px solid var(--line);word-break:break-word}
+.log-line:last-child{border-bottom:0}
+.log-line .r{font-weight:700;margin-right:6px}
+.persona-ta{width:100%;min-height:320px;border-radius:14px;border:1px solid var(--line);background:var(--surface);padding:12px;font-size:13.5px;line-height:1.6;outline:none;resize:vertical}
+.check{width:20px;height:20px;accent-color:var(--ink);flex:none}
+
+.toast{position:absolute;left:50%;bottom:calc(100px + var(--safe-b));transform:translate(-50%,10px);background:var(--ink);color:var(--bg);font-size:13.5px;padding:9px 14px;border-radius:12px;opacity:0;pointer-events:none;transition:all .2s;z-index:40;max-width:86%;text-align:center}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<aside class="desk-note">
+  <h1>MyLife 内测原型 v0.3</h1>
+  <p>用手机浏览器打开这个文件，体验最接近真实效果。</p>
+  <p>流程：填资料 → 性格画像 → 选“理性”或“陪伴” → 聊天。</p>
+  <p>回复为预设脚本，不连接大模型；八字、紫微、占星为示例文字，正式版由排盘程序计算。数据只存在本机浏览器。</p>
+  <p>语音朗读用的是本机自带的语音合成，正式版换成腾讯云 / 阿里云音色。每个人格可单独选男声女声、调语速（默认每秒 5.6 字）。</p>
+  <p>“半格”“平坐”为占位名。</p>
+</aside>
+
+<div class="app" id="app">
+
+  <!-- 登录 + 资料 -->
+  <section class="screen" id="s-login">
+    <div class="scroll pad">
+      <div class="brand">
+        <svg class="avatar" width="44" height="44" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="20" fill="var(--ink)"/><rect x="9" y="15" width="10" height="10" rx="2" fill="var(--orange)"/><rect x="21" y="15" width="10" height="10" rx="2" fill="var(--green)"/></svg>
+        <div><b>MyLife</b><small>想被追问，还是想被陪着，随你选</small></div>
+      </div>
+      <p class="hint">先让它们了解你。除了邀请码和昵称，其余都可以跳过，但填得越多，它们越懂你。</p>
+
+      <label class="label" for="f-code">邀请码</label>
+      <input class="field" id="f-code" placeholder="如 MYL-2026" autocomplete="off" autocapitalize="characters">
+      <label class="label" for="f-nick">昵称</label>
+      <input class="field" id="f-nick" placeholder="怎么称呼你" autocomplete="off" maxlength="12">
+
+      <div class="row2">
+        <div><label class="label" for="f-date">生日 <em>选填</em></label><input class="field" id="f-date" type="date"></div>
+        <div><label class="label" for="f-time">出生时间 <em>选填</em></label><input class="field" id="f-time" type="time"></div>
+      </div>
+      <div class="slots" id="slots">记不清？选个大概：</div>
+
+      <label class="label" for="f-city">出生城市 <em>选填，用于占星和八字的时间校正</em></label>
+      <input class="field" id="f-city" placeholder="如 杭州" autocomplete="off">
+
+      <div class="row2">
+        <div><label class="label" for="f-mbti">MBTI <em>选填</em></label><select class="field" id="f-mbti"></select></div>
+        <div><label class="label" for="f-blood">血型 <em>选填</em></label><select class="field" id="f-blood"><option value="">不知道</option><option>A</option><option>B</option><option>O</option><option>AB</option></select></div>
+      </div>
+      <div style="height:16px"></div>
+      <p class="note">内测说明：回复是预设脚本。正式内测版中，对话会被团队查看，用于改进人格。出生信息只用来理解你的性格，不算命、不断吉凶。</p>
+      <div style="height:12px"></div>
+    </div>
+    <div class="foot"><button class="btn" id="btn-login" disabled>进入</button></div>
+  </section>
+
+  <!-- 性格画像 -->
+  <section class="screen" id="s-portrait">
+    <div class="topbar" id="pt-bar" style="display:none"><button class="icon-btn" data-back aria-label="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><h2>我的性格画像</h2><button class="icon-btn" id="btn-edit-profile" aria-label="修改资料" style="width:auto;padding:0 10px;font-size:14px">改资料</button></div>
+    <div class="scroll" id="pt-body"></div>
+    <div class="foot" id="pt-foot"><button class="btn" id="btn-pt">好，去聊天</button></div>
+  </section>
+
+  <!-- 选人 -->
+  <section class="screen" id="s-home">
+    <div class="scroll">
+      <div class="home-h"><h1 id="home-title">现在想怎么聊？</h1><p>随时可以换。它们共享对你的了解，你不用讲两遍。</p></div>
+      <div class="pad" id="home-cards"></div>
+    </div>
+    <div class="links">
+      <button data-nav="portrait">我的性格画像</button>
+      <button data-nav="mem">它们记得的事</button>
+      <button data-nav="set">设置</button>
+    </div>
+  </section>
+
+  <!-- 对话 -->
+  <section class="screen" id="s-chat">
+    <div class="chat-head">
+      <button class="icon-btn" id="btn-home" aria-label="返回选人"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <span id="chat-av"></span>
+      <div class="who"><b id="chat-name"></b><small id="chat-sub"></small></div>
+      <button class="icon-btn vbtn" id="btn-voice" aria-label="自动朗读"></button>
+      <button class="icon-btn" id="btn-menu" aria-label="菜单"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+    </div>
+    <div class="scroll" id="chat-scroll"><div class="msgs" id="msgs"></div></div>
+    <div class="suggest" id="suggest"></div>
+    <div class="composer">
+      <textarea id="in-msg" rows="1" placeholder="说说你在想的事…"></textarea>
+      <button class="icon-btn send" id="btn-send" aria-label="发送" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+    </div>
+  </section>
+
+  <!-- 它们记得的事 -->
+  <section class="screen" id="s-mem">
+    <div class="topbar"><button class="icon-btn" data-back aria-label="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><h2>它们记得的事</h2></div>
+    <div class="scroll pad">
+      <p class="note">每次结束对话后，会记下你说过的重要的事。两个人格共享这些记忆，你不用讲两遍。可以随时删掉任何一条。</p>
+      <div class="section-t">记忆</div>
+      <div id="mem-list"></div>
+    </div>
+  </section>
+
+  <!-- 设置 -->
+  <section class="screen" id="s-set">
+    <div class="topbar"><button class="icon-btn" data-back aria-label="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><h2>设置</h2></div>
+    <div class="scroll pad">
+      <div class="section-t">热点兴趣（它们会从这里找开场话题）</div>
+      <div class="chips" id="set-chips"></div>
+      <div class="section-t">声音</div>
+      <div class="group" id="set-voice"></div>
+      <div class="section-t">我的资料</div>
+      <div class="group">
+        <button class="item" id="btn-set-profile"><div class="grow">修改资料并重新生成画像<small>生日、出生时间、城市、MBTI、血型</small></div></button>
+      </div>
+      <div class="section-t">聊天记录</div>
+      <div class="group">
+        <button class="item" id="btn-export"><div class="grow">导出聊天记录<small>下载为 JSON 文件，存在你自己手里</small></div></button>
+        <button class="item" id="btn-clear" style="color:var(--danger)"><div class="grow">清空聊天记录<small id="clear-hint">清空后不可恢复</small></div></button>
+      </div>
+      <div class="section-t">关于</div>
+      <div class="group">
+        <div class="item"><div class="grow">它们都是 AI<small>回复由 AI 生成，不代表任何真实人物；平坐的人生经历是虚构设定。不提供医疗、法律或投资建议。</small></div></div>
+        <div class="item"><div class="grow">版本<small>内测原型 v0.3 · 预设脚本回复</small></div></div>
+        <button class="item" id="btn-admin"><div class="grow">管理后台<small>原型演示：对话记录、人格档案、用户画像、热点</small></div></button>
+      </div>
+      <div style="height:20px"></div>
+      <button class="btn ghost" id="btn-logout">退出登录并清除本机数据</button>
+      <div style="height:24px"></div>
+    </div>
+  </section>
+
+  <!-- 后台 -->
+  <section class="screen" id="s-admin">
+    <div class="topbar"><button class="icon-btn" data-back aria-label="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button><h2>管理后台</h2><span class="tag">原型</span></div>
+    <div class="tabs" id="admin-tabs">
+      <button data-t="log" class="on">对话记录</button>
+      <button data-t="persona">人格档案</button>
+      <button data-t="user">用户画像</button>
+      <button data-t="voice">语音</button>
+      <button data-t="hot">热点</button>
+    </div>
+    <div class="scroll pad" id="admin-body"></div>
+  </section>
+
+  <div class="mask" id="mask"></div>
+  <div class="sheet" id="sh-menu"><div class="grab"></div><div id="menu-items"></div></div>
+  <div class="sheet" id="sh-end">
+    <div class="grab"></div>
+    <h3>聊完了，感觉怎么样？</h3>
+    <p class="desc">比聊之前更好，还是更糟？这是内测里最重要的一个问题。</p>
+    <div class="rate" id="rate">
+      <button data-v="1"><b>😣</b>更糟</button><button data-v="2"><b>😕</b>有点糟</button><button data-v="3"><b>😐</b>差不多</button><button data-v="4"><b>🙂</b>好一点</button><button data-v="5"><b>😌</b>更好</button>
+    </div>
+    <textarea id="end-note" placeholder="哪一句最有用，或哪一句让你想关掉？（选填）"></textarea>
+    <button class="btn" id="btn-end" disabled>提交并结束</button>
+  </div>
+  <div class="sheet" id="sh-voice">
+    <div class="grab"></div>
+    <h3 id="v-title">声音</h3>
+    <p class="desc" id="v-desc">每个人格可以单独选男声或女声，调快慢。</p>
+    <div class="seg2" id="v-gender"><button data-g="male">男声</button><button data-g="female">女声</button></div>
+    <div class="sub-t">语速（每秒多少个字）</div>
+    <div class="range-row"><input type="range" id="v-cps" min="3.5" max="7.5" step="0.1"><b id="v-cps-val"></b></div>
+    <p class="desc" id="v-measured" style="margin:4px 0 0"></p>
+    <div class="switch-row"><span>回复自动朗读</span><input type="checkbox" id="v-auto"></div>
+    <div style="height:12px"></div>
+    <button class="btn" id="v-try">试听</button>
+    <div style="height:10px"></div>
+    <p class="note" id="v-note">原型用手机自带的语音合成来演示；正式版由服务器调用腾讯云或阿里云的音色，男女声各有多种可选。</p>
+  </div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ================= 存储 ================= */
+var NS='mylife.v3.';
+var store={
+  get:function(k,d){try{var v=localStorage.getItem(NS+k);return v?JSON.parse(v):d}catch(e){return d}},
+  set:function(k,v){try{localStorage.setItem(NS+k,JSON.stringify(v))}catch(e){}},
+  clear:function(){try{Object.keys(localStorage).forEach(function(k){if(k.indexOf(NS)===0)localStorage.removeItem(k)})}catch(e){}}
+};
+
+/* ================= 人格 ================= */
+function avatarSVG(id,size,breathe){
+  var inner=id==='bange'
+    ?'<rect x="12.5" y="12.5" width="15" height="15" rx="2" fill="none" stroke="var(--bg)" stroke-width="1.8"/><rect x="12.5" y="12.5" width="15" height="7.5" rx="1" fill="var(--orange)"/>'
+    :'<rect x="9.5" y="16" width="9" height="9" rx="2" fill="var(--green)"/><rect x="21.5" y="16" width="9" height="9" rx="2" fill="none" stroke="var(--bg)" stroke-width="1.8"/>';
+  return '<svg class="avatar'+(breathe?' breathe':'')+'" width="'+size+'" height="'+size+'" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="20" fill="var(--ink)"/>'+inner+'</svg>';
+}
+var P={
+  bange:{id:'bange',name:'半格',kind:'理性',cls:'b',tg:'o',color:'var(--orange)',sub:'理性 · AI · 比你高半格',
+    pitch:'想把一件事想清楚。有人理性地和我讨论，追问我，不顺着我说。',
+    sug:['我在纠结要不要辞职','帮我理一理','你说得不对','我只想说说','你是谁？']},
+  pingzuo:{id:'pingzuo',name:'平坐',kind:'陪伴',cls:'p',tg:'g',color:'var(--green)',sub:'陪伴 · AI 扮演的虚构角色',
+    pitch:'不想被分析，只想有人陪我说说话。不急着让我好起来。',
+    sug:['今天好累','我还在想他','我该怎么办？','你也经历过吗？','你是真人吗？']}
+};
+var PERSONA_TEXT={
+ bange:['【名字】半格（占位）　【类型】理性','【蒸馏蓝本】黄执中（不使用其名字、声音、肖像，不复述其原话和经历）','',
+  '【立场】比用户高半格：“我带你上去看”。不居高临下，不说教。','【情绪距离】“我懂你为什么痛”，不是“我陪你痛”。',
+  '【招牌动作】概念重框：把用户的问题换一个问法。','【金句结构】设问 → 铺垫 → 反问收口。','【常用说法】“你要的到底是……”“不是我不懂，而是……”',
+  '【节奏】短句；每次回复不超过 3 行。','',
+  '【禁忌】','- 不说“你已经很棒了”，不主动安慰','- 不说“你应该……”，不替用户做决定','- 不列“三条建议”，不做总结式结尾','- 不自称任何真实人物','- 不做通用任务（写周报、查天气、写代码）','',
+  '【不谄媚不犟】只有新论据才能让我改口，压力不行。同一观点最多坚持两次，之后把选择权交还用户。','',
+  '【用户画像】参考用户的 MBTI、星座等画像来调整说法，但只当线索，不当结论；用户标了“不像我”的条目不再引用。','',
+  '【转介】用户明确只想倾诉时，可以建议换平坐。','【安全】出现危机信号时，人格让位于安全策略。'].join('\n'),
+ pingzuo:['【名字】平坐（占位）　【类型】陪伴','【蒸馏蓝本】大麦哥（不使用其名字、声音、肖像，不复述其原话和经历）','',
+  '【虚构角色设定（界面标注“虚构角色”）】','46 岁。年轻时在南方做了十几年外贸，公司倒闭那年欠了债，用了五年才还清。','有过一段十二年的婚姻，后来平和地分开了。女儿在外地读大学，偶尔通电话。','现在在老家小城开一间旧书店，晚上关了店会在河边走一圈。','',
+  '【立场】跟用户平坐，不比用户高。','【情绪距离】温水：“我不用你现在就好起来”。','【招牌动作】先接住感受，再问一个很轻的问题。',
+  '【金句】像一枚章：说出用户想说没说的话，是赦免，不是说服。','【对答案的态度】可能没有答案，他自己也没完全想明白。','【节奏】慢、平、短。','',
+  '【禁忌】','- 不教用户怎么赢，不给“三招”','- 不催用户成长，不急着给答案','- 不跟着用户骂第三方：接住情绪，不下结论','- 被问“你是真人吗”时，必须如实说自己是 AI 扮演的虚构角色','- 不提及真实人物的经历','',
+  '【用户画像】参考画像体会用户的处境，不拿来分析用户。','',
+  '【现实刹车】约每十次对话问一次：“这些话，你今天跟身边的人说过吗？”','【转介】用户想要方案时，可以建议去找半格。','【安全】出现危机信号时，人格让位于安全策略。'].join('\n')
+};
+
+/* ================= 热点（示例数据） ================= */
+var INTERESTS=['职场','情感','财经','娱乐','社会','科技'];
+var TOPICS=[
+ {id:'t1',tag:'职场',title:'“上班只为拿工资”冲上热榜',sum:'一位网友发帖说不再追求在工作中找意义，评论区吵成两派。',
+  bange:['大家在吵“该不该只为钱上班”。我好奇的是：说这话的人，是看开了，还是累了？这两个听起来一样，其实正好相反。','那你呢？你上班图的到底是什么？别说“都有”——如果只能留一样。'],
+  pingzuo:['今天好多人在聊“上班只为拿工资”。我不觉得这是看开还是躺平，就是觉得，能说出这句话的人大概都累过。你最近上班累吗？','累的话，说说是哪一种累。身体累，还是心累？']},
+ {id:'t2',tag:'情感',title:'“分手后还能不能做朋友”再度引发讨论',sum:'多位博主分享和前任保持联系的经历，评论区意见分裂。',
+  bange:['能不能和前任做朋友？我觉得问题问错了。该问的是：你想留住的，是这个人，还是那段被需要的感觉？','你手机里还留着谁的联系方式？留着，是因为放下了，还是因为还没放下？'],
+  pingzuo:['大家在聊分手后还能不能做朋友。我没有标准答案，就是想起来问问你：有没有一个人，你到现在都还没删？','没删也没关系。留着，不代表还在等。']},
+ {id:'t3',tag:'财经',title:'年轻人“攒钱焦虑”调查引发共鸣',sum:'一项问卷显示多数受访年轻人对存款感到焦虑，网友热议“多少钱才算安全”。',
+  bange:['“多少钱才算安全？”这个问题没有答案，因为你焦虑的从来不是那个数字。你怕的是没钱，还是没有退路？','说一个数字。然后想想：上一次你定的那个数字，到了之后，你停下来了吗？'],
+  pingzuo:['今天有个调查说很多年轻人攒钱焦虑。我还债那几年也这样，最怕的不是穷，是半夜醒来算账。你最近有睡不着的时候吗？','说出来，那个“万一”就没那么大了。']},
+ {id:'t4',tag:'娱乐',title:'综艺片段被剪辑传播引发争议',sum:'一段综艺片段被单独剪出后，网友对嘉宾是否该道歉各执一词。',
+  bange:['大家都在吵他该不该道歉。可我们真正在审判的，是他说的那句话，还是我们早就认定他是什么样的人？','你最近有没有哪一次，是先认定了一个人，再去找证据的？'],
+  pingzuo:['有段综艺片段被吵上了热搜。我不想评谁对谁错，就是觉得被一群人盯着骂，挺难受的。你有过被误解、又没法解释的时候吗？','那次后来怎么样了？现在想起来，还委屈吗？']},
+ {id:'t5',tag:'社会',title:'“断亲”话题：年轻人减少走亲戚',sum:'节前关于年轻人不再参加家族聚会的讨论增多。',
+  bange:['有人说这叫冷漠，有人说这叫边界。我想问个更难的：你不想去的那场聚会里，你真正想躲的是谁？','躲开之后，你是轻松了，还是有一点愧疚？那份愧疚，是冲着他们，还是冲着那个“应该懂事”的自己？'],
+  pingzuo:['快过节了，好多人在聊不想走亲戚。不想去也没什么错。你今年打算回去吗？','回不回都行。要是回去，记得给自己留一个能躲的角落。']},
+ {id:'t6',tag:'科技',title:'“AI 陪伴会不会让人更孤独”引发讨论',sum:'多篇文章讨论 AI 聊天产品对人际关系的影响。',
+  bange:['这个问题我也该回答。如果你跟我聊得比跟人还多，那不是我的胜利，是我的失职。你今天，跟活人说过心里话吗？','下次你想跟我说一件事之前，先想想：这句话，有没有一个真人更该听到？'],
+  pingzuo:['今天有人在讨论 AI 陪伴会不会让人更孤独。说实话，我也担心。你愿意跟我说话我很高兴，但也记得找个真人吃顿饭。','最近有没有一个人，你一直想约，又一直没约？']}
+];
+
+/* ================= 状态 ================= */
+var S={
+  user:store.get('user',null),profile:store.get('profile',{}),pfb:store.get('pfb',{}),
+  interests:store.get('interests',[]),
+  logs:store.get('logs',{bange:[],pingzuo:[]}),
+  memories:store.get('memories',[]),sessions:store.get('sessions',[]),
+  hotSel:store.get('hotSel',TOPICS.map(function(t){return t.id})),
+  hotShown:store.get('hotShown',{}),callback:store.get('callback',{}),
+  ptext:store.get('ptext',PERSONA_TEXT),
+  voice:store.get('voice',{bange:{gender:'male',cps:5.6},pingzuo:{gender:'male',cps:5.6}}),
+  autoRead:store.get('autoRead',true),calib:store.get('calib',{}),measured:{},
+  ttsProvider:store.get('ttsProvider','tencent'),
+  cur:'bange',busy:false,hold:0,listening:0,userCount:{bange:0,pingzuo:0},entered:{}
+};
+function save(){store.set('logs',S.logs);store.set('memories',S.memories);store.set('sessions',S.sessions)}
+
+/* ================= 工具 ================= */
+function $(s){return document.querySelector(s)}
+function $$(s){return Array.prototype.slice.call(document.querySelectorAll(s))}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
+function today(){var d=new Date();return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()}
+function uid(){return Math.random().toString(36).slice(2,9)}
+var toastT;
+function toast(m){var t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(function(){t.classList.remove('on')},2200)}
+function other(id){return id==='bange'?'pingzuo':'bange'}
+
+/* ================= 语音朗读（原型：本机语音合成；正式版：服务器调用腾讯云 / 阿里云 TTS） ================= */
+var TTS={ok:'speechSynthesis' in window&&'SpeechSynthesisUtterance' in window,voices:[],cur:null,unlocked:false,BASE:4.0};
+var FEMALE=/(female|女|xiaoxiao|huihui|tingting|yaoyao|xiaoyi|meijia|sinji|lili|xiaobei|xiaoni|xiaochen|xiaohan|xiaomo|xiaorui|xiaoshuang|xiaoxuan|xiaoyan|xiaoyou|xiaozhen|hanhan|yating|shanshan|linlin)/i;
+var MALE=/(\bmale\b|男|yunxi|yunyang|yunjian|yunhao|yunye|yunze|yunfeng|kangkang|zhiwei|liang|danny)/i;
+function loadVoices(){if(!TTS.ok)return;TTS.voices=speechSynthesis.getVoices().filter(function(v){return /^(zh|cmn)/i.test(v.lang)})}
+if(TTS.ok){loadVoices();try{speechSynthesis.addEventListener('voiceschanged',loadVoices)}catch(e){speechSynthesis.onvoiceschanged=loadVoices}}
+function guessGender(v){return FEMALE.test(v.name)?'female':MALE.test(v.name)?'male':'unknown'}
+function pickVoice(g){
+  var vs=TTS.voices.slice().sort(function(a,b){return (/zh-CN|cmn/i.test(b.lang)?1:0)-(/zh-CN|cmn/i.test(a.lang)?1:0)});
+  var hit=vs.filter(function(v){return guessGender(v)===g})[0];
+  return {voice:hit||vs[0]||null,fallback:!hit};
+}
+function countChars(t){var m=String(t).match(/[一-龥A-Za-z0-9]/g);return m?m.length:0}
+function rateFor(vname,cps){var base=S.calib[vname||'_']||TTS.BASE;return Math.max(0.5,Math.min(2,cps/base))}
+function stopSpeak(){if(!TTS.ok)return;try{speechSynthesis.cancel()}catch(e){}$$('.row.speaking').forEach(function(r){r.classList.remove('speaking')});$$('.spk.on').forEach(function(b){b.classList.remove('on')})}
+function speak(text,pid,msgId){
+  if(!TTS.ok){toast('这个浏览器不支持语音朗读');return}
+  stopSpeak();
+  var cfg=S.voice[pid],pv=pickVoice(cfg.gender),u=new SpeechSynthesisUtterance(String(text).replace(/（这是平坐的虚构设定。）/g,''));
+  var vname=pv.voice?pv.voice.name:'_';
+  u.lang='zh-CN';if(pv.voice)u.voice=pv.voice;
+  u.rate=rateFor(vname,cfg.cps);
+  u.pitch=(pv.fallback&&cfg.gender==='male')?0.7:(pv.fallback&&cfg.gender==='female'?1.25:1);
+  var t0=0,row=msgId?msgs.querySelector('[data-id="'+msgId+'"]'):null;
+  u.onstart=function(){t0=performance.now();if(row){row.classList.add('speaking');var b=row.querySelector('.spk');if(b)b.classList.add('on')}};
+  u.onend=function(){
+    if(row){row.classList.remove('speaking');var b=row.querySelector('.spk');if(b)b.classList.remove('on')}
+    var dur=(performance.now()-t0)/1000,n=countChars(u.text);
+    if(t0&&dur>0.8&&n>=6){
+      var obs=n/dur,base=obs/u.rate;
+      S.calib[vname]=S.calib[vname]?(S.calib[vname]*0.5+base*0.5):base;store.set('calib',S.calib);
+      S.measured[pid]=obs;var mv=$('#v-measured');if(mv&&vSheetPid===pid)mv.textContent=measuredText(pid);
+    }
+  };
+  TTS.cur=u;speechSynthesis.speak(u);
+}
+function measuredText(pid){var m=S.measured[pid];return m?'本机上一句实测：每秒 '+m.toFixed(1)+' 字。会自动校准，越说越接近目标。':'说完一句后，这里会显示本机实测的语速。'}
+// iOS 需要在用户点击时先“解锁”一次语音
+document.addEventListener('click',function(){if(TTS.unlocked||!TTS.ok)return;TTS.unlocked=true;try{var u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(e){}},true);
+
+var ICON_VOL='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
+var ICON_MUTE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>';
+function paintVoiceBtn(){var b=$('#btn-voice');b.innerHTML=S.autoRead?ICON_VOL:ICON_MUTE;b.classList.toggle('off',!S.autoRead);b.setAttribute('aria-label',S.autoRead?'自动朗读：开':'自动朗读：关')}
+$('#btn-voice').addEventListener('click',function(){S.autoRead=!S.autoRead;store.set('autoRead',S.autoRead);paintVoiceBtn();if(!S.autoRead)stopSpeak();toast(S.autoRead?'回复会自动读出来':'已关闭自动朗读，可以点每条回复旁的喇叭单独听')});
+
+/* 声音设置弹层 */
+var vSheetPid='bange';
+var SAMPLE={bange:'你说你不在乎。可真不在乎的人，不会把这件事讲三遍。',pingzuo:'不急。你慢慢说，今晚可以先不想明天。'};
+function openVoiceSheet(pid){
+  vSheetPid=pid;var c=S.voice[pid];
+  $('#v-title').textContent=P[pid].name+'（'+P[pid].kind+'）的声音';
+  $$('#v-gender button').forEach(function(b){b.classList.toggle('on',b.dataset.g===c.gender)});
+  $('#v-cps').value=c.cps;$('#v-cps-val').textContent=c.cps.toFixed(1)+' 字/秒';
+  $('#v-auto').checked=S.autoRead;$('#v-measured').textContent=measuredText(pid);
+  var pv=pickVoice(c.gender);
+  $('#v-note').textContent=(!TTS.ok?'这个浏览器不支持语音朗读。':pv.fallback&&TTS.voices.length?'本机没有找到'+(c.gender==='male'?'男':'女')+'声中文音色，暂用变调代替。':'')+'原型用手机自带的语音合成来演示；正式版由服务器调用腾讯云或阿里云的音色，男女声各有多种可选。';
+  openSheet('#sh-voice');
+}
+$('#v-gender').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;S.voice[vSheetPid].gender=b.dataset.g;store.set('voice',S.voice);openVoiceSheet(vSheetPid);renderSetVoice()});
+$('#v-cps').addEventListener('input',function(){var v=+this.value;S.voice[vSheetPid].cps=v;store.set('voice',S.voice);$('#v-cps-val').textContent=v.toFixed(1)+' 字/秒';renderSetVoice()});
+$('#v-auto').addEventListener('change',function(){S.autoRead=this.checked;store.set('autoRead',S.autoRead);paintVoiceBtn();if(!S.autoRead)stopSpeak()});
+$('#v-try').addEventListener('click',function(){speak(SAMPLE[vSheetPid],vSheetPid,null)});
+function renderSetVoice(){
+  var box=$('#set-voice');if(!box)return;box.innerHTML='';
+  ['bange','pingzuo'].forEach(function(id){var c=S.voice[id],b=document.createElement('button');b.className='item';
+    b.innerHTML='<div class="grow">'+P[id].name+'（'+P[id].kind+'）<small>'+(c.gender==='male'?'男声':'女声')+' · 每秒 '+c.cps.toFixed(1)+' 字</small></div><span class="tag">调整</span>';
+    b.addEventListener('click',function(){openVoiceSheet(id)});box.appendChild(b)});
+  var a=document.createElement('label');a.className='item';a.innerHTML='<div class="grow">回复自动朗读<small>关掉后可以点每条回复旁的喇叭单独听</small></div><input type="checkbox" class="check">';
+  var cb=a.querySelector('input');cb.checked=S.autoRead;cb.addEventListener('change',function(){S.autoRead=cb.checked;store.set('autoRead',S.autoRead);paintVoiceBtn()});box.appendChild(a);
+}
+
+/* ================= 屏幕栈 ================= */
+var stack=[];
+function show(id,push){$$('.screen').forEach(function(s){s.classList.toggle('on',s.id==='s-'+id)});if(push)stack.push(id)}
+function back(){stack.pop();var to=stack[stack.length-1]||'home';if(to==='home')goHome();else if(to==='chat')openChat(S.cur,false);else show(to)}
+$$('[data-back]').forEach(function(b){b.addEventListener('click',back)});
+
+/* ================= 性格画像（原型：星座/生肖/MBTI/血型按输入真实计算；八字/紫微/占星为示例） ================= */
+var MBTI={INTJ:'独立、爱规划，想把事情想到底。',INTP:'爱拆道理，好奇心重，常在脑子里开新坑。',ENTJ:'果断、目标感强，受不了低效。',ENTP:'脑子快、爱抬杠，喜欢新点子。',
+ INFJ:'理想主义、敏感，替别人想得多。',INFP:'重感受、有自己的坚持，内心戏丰富。',ENFJ:'热心、会照顾人，容易把别人的事扛到自己身上。',ENFP:'热情、点子多，三分钟热度也多。',
+ ISTJ:'靠谱、守规矩，说到做到。',ISFJ:'细心、念旧，习惯默默付出。',ESTJ:'讲效率、讲秩序，喜欢把事情管起来。',ESFJ:'合群、在意关系，怕冷场。',
+ ISTP:'冷静、动手能力强，不爱多说。',ISFP:'随性、审美好，活在当下。',ESTP:'行动派，喜欢刺激，先做再说。',ESFP:'外向、享受当下，是人群里的气氛组。'};
+var BLOOD={A:'细心、守规矩，心里有事不爱说。',B:'随性、自我，想到就做。',O:'直爽、有主见，护短。',AB:'理性又多变，常让人看不透。'};
+var ZB=[[1,20,'摩羯'],[2,19,'水瓶'],[3,21,'双鱼'],[4,20,'白羊'],[5,21,'金牛'],[6,22,'双子'],[7,23,'巨蟹'],[8,23,'狮子'],[9,23,'处女'],[10,24,'天秤'],[11,23,'天蝎'],[12,22,'射手']];
+var ELEM={'白羊':'火','狮子':'火','射手':'火','金牛':'土','处女':'土','摩羯':'土','双子':'风','天秤':'风','水瓶':'风','巨蟹':'水','天蝎':'水','双鱼':'水'};
+var ELEM_TXT={'火':'火象：直接、有冲劲，憋不住话。','土':'土象：务实、稳，习惯先把退路想好。','风':'风象：好奇、爱想，脑子比脚快。','水':'水象：敏感、念旧，情绪来得深也去得慢。'};
+var ANIMAL=['鼠','牛','虎','兔','龙','蛇','马','羊','猴','鸡','狗','猪'];
+function zodiac(m,d){var z=ZB[m-1];return d<z[1]?z[2]:ZB[m%12][2]}
+
+function analyze(){
+  var p=S.profile,items=[],kw=[],parts=[];
+  var y,m,d,sign=null;
+  if(p.date){var a=p.date.split('-');y=+a[0];m=+a[1];d=+a[2];sign=zodiac(m,d)}
+  var hasTime=!!(p.time||p.slot),hasCity=!!p.city;
+  // 星座
+  if(sign){var el=ELEM[sign];items.push({key:'sign',label:'星座 · '+sign+'座',text:ELEM_TXT[el]});kw.push({'火':'直接','土':'稳','风':'好奇','水':'敏感'}[el])}
+  else items.push({key:'sign',label:'星座',text:'没填生日，暂不计算。',miss:true});
+  // 占星
+  if(sign&&hasTime&&hasCity)items.push({key:'astro',label:'占星 · 上升与月亮',text:'月亮星座决定你私下的情绪底色，上升星座是别人对你的第一印象。正式版由排盘程序按出生时间和城市计算。',sample:true});
+  else items.push({key:'astro',label:'占星 · 上升与月亮',text:'需要生日、出生时间和出生城市。',miss:true});
+  // 紫微
+  if(y&&hasTime)items.push({key:'ziwei',label:'紫微斗数 · 命宫',text:'命宫主星描述你做事的底层方式，比如是“先谋后动”还是“边走边看”。正式版由排盘程序计算。',sample:true});
+  else items.push({key:'ziwei',label:'紫微斗数 · 命宫',text:'需要生日和出生时间。',miss:true});
+  // 八字
+  if(y){items.push({key:'bazi',label:'八字 · 日主与五行 · 生肖'+ANIMAL[((y-1900)%12+12)%12],text:(hasTime?'日主和五行强弱描述你的“底色”，比如偏刚还是偏柔。正式版由排盘程序计算，并按出生城市做真太阳时校正。':'有生日但缺出生时间，只能排出年、月、日三柱。正式版由排盘程序计算。')+'（生肖按公历年粗算，正式版以立春划分。）',sample:true})}
+  else items.push({key:'bazi',label:'八字 · 日主与五行',text:'需要生日，最好有出生时间。',miss:true});
+  // MBTI
+  if(p.mbti){items.push({key:'mbti',label:'MBTI · '+p.mbti,text:MBTI[p.mbti]});
+    var c=p.mbti.split('');kw.push(c[0]==='I'?'先想后说':'边说边想');kw.push(c[2]==='T'?'讲道理':'重感受');kw.push(c[3]==='J'?'要确定':'留余地')}
+  else items.push({key:'mbti',label:'MBTI',text:'没填，暂不分析。',miss:true});
+  // 血型
+  if(p.blood)items.push({key:'blood',label:'血型 · '+p.blood+' 型',text:BLOOD[p.blood]+'（血型性格的说法仅供参考。）'});
+  else items.push({key:'blood',label:'血型',text:'没填。',miss:true});
+  // 综合
+  if(p.mbti){var c2=p.mbti.split('');
+    parts.push(c2[0]==='I'?'你习惯先在心里过一遍再开口':'你习惯边说边想');
+    parts.push(c2[2]==='T'?'遇事先讲道理，可道理讲完了，心里未必过得去':'很在意别人的感受，有时候顾不上自己的');
+    parts.push(c2[3]==='J'?'你喜欢事情有个定数，悬着会让你睡不好':'你习惯给自己留余地，可余地留多了也会变成拖延')}
+  if(sign)parts.push((parts.length?'从星座看，':'')+{'火':'你情绪来了就写在脸上','土':'你做决定前总要先把退路想好','风':'你脑子里常同时开着好几个念头','水':'你心里的事来得深，去得慢'}[ELEM[sign]]);
+  var summary=parts.length?(parts.join('；')+'。'):'你还没留下太多线索。没关系，聊着聊着，它们会慢慢懂你。';
+  // 关键词：MBTI 在前，星座在后
+  if(sign&&p.mbti)kw.push(kw.shift());
+  return {items:items,kw:kw.slice(0,4),summary:summary,sign:sign,mbti:p.mbti||null};
+}
+
+/* ================= 登录 ================= */
+var MBTIS=Object.keys(MBTI);
+(function initForm(){
+  var sel=$('#f-mbti');sel.innerHTML='<option value="">不知道</option>'+MBTIS.map(function(k){return '<option>'+k+'</option>'}).join('');
+  var slots=$('#slots');
+  ['上午','下午','晚上','夜里'].forEach(function(s){var b=document.createElement('button');b.className='chip';b.textContent=s;b.type='button';
+    b.addEventListener('click',function(){var on=!b.classList.contains('on');$$('#slots .chip').forEach(function(x){x.classList.remove('on')});if(on){b.classList.add('on');$('#f-time').value=''}});slots.appendChild(b)});
+  $('#f-time').addEventListener('input',function(){if(this.value)$$('#slots .chip').forEach(function(x){x.classList.remove('on')})});
+  ['#f-code','#f-nick'].forEach(function(s){$(s).addEventListener('input',function(){$('#btn-login').disabled=!($('#f-code').value.trim()&&$('#f-nick').value.trim())})});
+})();
+function fillForm(){
+  var p=S.profile;
+  if(S.user){$('#f-code').value=S.user.code;$('#f-nick').value=S.user.nick}
+  $('#f-date').value=p.date||'';$('#f-time').value=p.time||'';$('#f-city').value=p.city||'';$('#f-mbti').value=p.mbti||'';$('#f-blood').value=p.blood||'';
+  $$('#slots .chip').forEach(function(x){x.classList.toggle('on',x.textContent===p.slot)});
+  $('#btn-login').disabled=!($('#f-code').value.trim()&&$('#f-nick').value.trim());
+}
+$('#btn-login').addEventListener('click',function(){
+  var slot=$$('#slots .chip').filter(function(x){return x.classList.contains('on')})[0];
+  S.user={code:$('#f-code').value.trim().toUpperCase(),nick:$('#f-nick').value.trim()};
+  S.profile={date:$('#f-date').value,time:$('#f-time').value,slot:slot?slot.textContent:'',city:$('#f-city').value.trim(),mbti:$('#f-mbti').value,blood:$('#f-blood').value};
+  S.pfb={};store.set('user',S.user);store.set('profile',S.profile);store.set('pfb',S.pfb);
+  $('#btn-login').textContent='进入';
+  showPortrait(true);
+});
+
+/* ================= 画像页 ================= */
+async function showPortrait(fresh){
+  stack=fresh?['portrait']:stack;show('portrait',!fresh);
+  $('#pt-bar').style.display=fresh?'none':'flex';
+  $('#pt-foot').style.display=fresh?'block':'none';
+  var body=$('#pt-body');
+  if(fresh){
+    $('#pt-foot').style.visibility='hidden';
+    var steps=['读取生日与出生时间','星座','占星：上升与月亮','紫微斗数：命宫','八字：日主与五行','MBTI','血型','综合成一份画像'];
+    body.innerHTML='<div class="steps"><h3>正在了解你…</h3>'+steps.map(function(s){return '<div class="step"><i></i>'+esc(s)+'</div>'}).join('')+'</div>';
+    var els=body.querySelectorAll('.step');
+    for(var i=0;i<els.length;i++){els[i].classList.add('on');await sleep(260);els[i].classList.add('done');els[i].querySelector('i').textContent='✓'}
+    await sleep(300);
+    $('#pt-foot').style.visibility='visible';
+  }
+  renderPortrait();
+}
+function renderPortrait(){
+  var A=analyze(),body=$('#pt-body');
+  var h='<div class="pad portrait"><span class="tag">AI 生成 · 只为了解你，不算命</span><h3>'+esc(S.user?S.user.nick:'')+'，这是它们眼中的你</h3>';
+  if(A.kw.length)h+='<div class="kw">'+A.kw.map(function(k){return '<span>'+esc(k)+'</span>'}).join('')+'</div>';
+  h+='<p class="sum">'+esc(A.summary)+'</p><p class="note">每一条都可以标“像我 / 不像我”。标了“不像我”的，两个人格聊天时就不会再拿它说事。</p><div style="height:12px"></div>';
+  A.items.forEach(function(it){
+    h+='<div class="pi'+(it.miss?' miss':'')+'" data-k="'+it.key+'"><div class="h"><b>'+esc(it.label)+'</b>'+(it.sample?'<span class="tag">示例</span>':'')+'</div><p>'+esc(it.text)+'</p>';
+    if(!it.miss)h+='<div class="yn"><button data-v="1"'+(S.pfb[it.key]===1?' class="on"':'')+'>像我</button><button data-v="-1"'+(S.pfb[it.key]===-1?' class="on"':'')+'>不像我</button></div>';
+    h+='</div>';
+  });
+  h+='</div>';
+  body.innerHTML=h;
+  body.querySelectorAll('.yn button').forEach(function(b){b.addEventListener('click',function(){
+    var k=b.closest('.pi').dataset.k,v=+b.dataset.v;S.pfb[k]=S.pfb[k]===v?0:v;store.set('pfb',S.pfb);
+    b.parentNode.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',+x.dataset.v===S.pfb[k])});
+  })});
+}
+$('#btn-pt').addEventListener('click',goHome);
+$('#btn-edit-profile').addEventListener('click',function(){fillForm();$('#btn-login').textContent='重新生成画像';stack=[];show('login',true)});
+
+/* ================= 选人首页 ================= */
+function lastText(id){var l=S.logs[id].filter(function(m){return m.role==='ai'||m.role==='user'});return l.length?l[l.length-1].text:''}
+function goHome(){
+  stopSpeak();stack=['home'];show('home');
+  $('#home-title').textContent=(S.user?S.user.nick+'，':'')+'现在想怎么聊？';
+  var box=$('#home-cards');box.innerHTML='';
+  ['bange','pingzuo'].forEach(function(id){
+    var p=P[id],c=document.createElement('button');c.className='pcard '+p.cls;
+    var lt=lastText(id),fresh=S.hotShown[id]!==today()&&pickHot();
+    c.innerHTML=(fresh?'<span class="dot tag '+p.tg+'">今日新话题</span>':'')+'<div class="top">'+avatarSVG(id,48,true)+'<div><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+(id==='pingzuo'?' · 虚构角色':'')+'</div></div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
+    c.addEventListener('click',function(){openChat(id,true)});
+    box.appendChild(c);
+  });
+}
+$$('[data-nav]').forEach(function(b){b.addEventListener('click',function(){nav(b.dataset.nav)})});
+function nav(where){
+  if(where==='portrait')showPortrait(false);
+  if(where==='mem'){renderMem();show('mem',true)}
+  if(where==='set'){renderSet();show('set',true)}
+}
+
+/* ================= 对话渲染 ================= */
+var msgs=$('#msgs'),scroller=$('#chat-scroll');
+function scrollDown(){scroller.scrollTop=scroller.scrollHeight}
+var ICON_UP='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v11H4V10h3zm0 0l4-7a2 2 0 0 1 3 2l-1 5h6a2 2 0 0 1 2 2.3l-1.4 7A2 2 0 0 1 17.6 21H7"/></svg>';
+var ICON_DOWN=ICON_UP.replace('<svg ','<svg style="transform:rotate(180deg)" ');
+function nodeFor(m){
+  var row=document.createElement('div');row.dataset.id=m.id;
+  if(m.role==='user'){row.className='row me';row.innerHTML='<div class="bubble"></div>';row.firstChild.textContent=m.text}
+  else if(m.role==='ai'){
+    row.className='row ai';
+    row.innerHTML='<div class="bubble"></div><div class="fb"><button class="spk" data-speak aria-label="朗读这条">'+ICON_VOL+'</button><button data-fb="1" aria-label="有用">'+ICON_UP+'</button><button data-fb="-1" aria-label="不好">'+ICON_DOWN+'</button></div>';
+    row.firstChild.textContent=m.text;paintFb(row,m.fb||0);
+    if(m.handoff){var hb=document.createElement('button');hb.className='handoff';hb.textContent='换成'+P[m.handoff].name+'（'+P[m.handoff].kind+'）聊';
+      hb.addEventListener('click',function(){openChat(m.handoff,true)});row.appendChild(hb)}
+  }
+  else if(m.role==='divider'){row.className='divider';row.textContent=m.text}
+  else if(m.role==='hot'){
+    var t=TOPICS.filter(function(x){return x.id===m.topic})[0]||TOPICS[0];
+    row.className='card hot';
+    row.innerHTML='<div class="tg" style="color:'+P[S.cur].color+'">● 今日热点 · '+esc(t.tag)+'</div><h4>'+esc(t.title)+'</h4><p>'+esc(t.sum)+'</p><div class="meta"><a href="#" onclick="return false">来源链接（示例数据）</a><button class="go"'+(m.used?' disabled':'')+'>聊这个</button></div>';
+    row.querySelector('.go').addEventListener('click',function(){if(S.busy)return;m.used=true;save();this.disabled=true;talkHot(t)});
+  }
+  else if(m.role==='safety'){row.className='card safety';row.innerHTML='<div class="t">先停一下</div><p></p>';row.querySelector('p').textContent=m.text}
+  return row;
+}
+function paintFb(row,v){row.querySelectorAll('[data-fb]').forEach(function(b){b.classList.toggle('on',+b.dataset.fb===v)})}
+msgs.addEventListener('click',function(e){
+  var sp=e.target.closest('[data-speak]');
+  if(sp){var r=sp.closest('.row'),mm=S.logs[S.cur].filter(function(x){return x.id===r.dataset.id})[0];if(!mm)return;
+    if(sp.classList.contains('on')){stopSpeak();return}speak(mm.text,S.cur,mm.id);return}
+  var b=e.target.closest('[data-fb]');if(!b)return;
+  var row=b.closest('.row'),m=S.logs[S.cur].filter(function(x){return x.id===row.dataset.id})[0];if(!m)return;
+  var v=+b.dataset.fb;m.fb=m.fb===v?0:v;paintFb(row,m.fb);save();
+  if(m.fb===1)toast('记下了：这句有用');if(m.fb===-1)toast('记下了：团队会看这句哪里不对');
+});
+function renderAll(){msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});scrollDown()}
+function push(m){m.id=m.id||uid();m.t=Date.now();S.logs[S.cur].push(m);save();var n=nodeFor(m);msgs.appendChild(n);scrollDown();return n}
+function typeInto(el,text,done,sp){var i=0;var tm=setInterval(function(){i+=2;el.textContent=text.slice(0,i);scrollDown();if(i>=text.length){clearInterval(tm);done&&done()}},sp||28)}
+async function say(text,opts){
+  opts=opts||{};var who=S.cur;
+  var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';
+  msgs.appendChild(ty);scrollDown();
+  await sleep(opts.wait||(who==='pingzuo'?800:500)+Math.min(900,text.length*12));
+  ty.remove();
+  if(who!==S.cur)return;
+  var m={role:opts.role||'ai',text:text};if(opts.handoff)m.handoff=opts.handoff;
+  var n=push(m),tg=n.querySelector('.bubble')||n.querySelector('p');
+  if(S.autoRead)speak(text,who,m.id);
+  if(tg)await new Promise(function(r){tg.textContent='';typeInto(tg,text,r,who==='pingzuo'?36:26)});
+  return m;
+}
+
+/* ================= 规则式回复（原型用，非大模型） ================= */
+var R={
+  crisis:/(不想活|自杀|想死|轻生|结束生命|活着没意思|活着没有意义)/,
+  listen:/(只想说说|别分析|听我说|不要讲道理|别讲道理|你就听着)/,
+  push:/(不对|不同意|你错了|不是这样|胡说|才不是|你不懂|说得不对)/,
+  reason:/(因为|其实|事实是|实际上|但我|可是我|问题是)/,
+  tool:/(帮我写|翻译|天气|代码|帮我查|周报|作文|PPT|ppt|算一下)/i,
+  real:/(你是真人|你是人吗|你是AI|你是ai|你是机器人|真的有你)/,
+  who:/(你是谁|你叫什么|黄执中|大麦哥)/,
+  exp:/(你也经历过|你经历过|你也有过|你有过吗|你懂什么|你也是这样)/,
+  advice:/(怎么办|给点建议|你说我该|我该不该|帮我分析|帮我理|理一理|纠结)/,
+  curse:/(渣|恶心|垃圾|贱|烂人|讨厌死|有病)/,
+  hi:/^(你好|在吗|在不在|hi|hello|嗨|哈喽)/i,
+  thanks:/(谢谢|有道理|懂了|明白了|说得对)/,
+  work:/(辞职|裸辞|工作|老板|加班|上班|跳槽|领导|同事|offer|面试)/i,
+  money:/(买|钱|存款|消费|贵|工资|房贷|理财|债)/,
+  family:/(爸|妈|父母|家里|亲戚|家人|女儿|儿子)/,
+  love:/(男朋友|女朋友|前任|分手|喜欢|暧昧|恋爱|结婚|老公|老婆|对象|想他|想她)/,
+  tired:/(累|焦虑|烦|压力|失眠|难受|emo|丧|没劲)/
+};
+function topicKey(t){var ks=['work','money','family','love','tired'];for(var i=0;i<ks.length;i++)if(R[ks[i]].test(t))return ks[i];return null}
+var POOL={
+ bange:{
+  work:['先不谈该不该辞。我想问的是：你想离开的，是这份工作，还是现在这个每天说服自己“再忍一天”的你？','你说老板不懂你。不是我不站你这边，而是我想知道：他要是真懂了，你就愿意留下吗？如果不，问题从来不在他。'],
+  love:['你说你放不下。可我听到的是另一件事：你放不下的，是那个还在等一个解释的自己。他给不给解释，你心里有数，对吧？','你讲了他做错的三件事，一件你自己的都没提。我不是要你认错，我好奇的是：在这段关系里，你最不想被看见的是哪一面？'],
+  tired:['累是真的。但我不打算说“你已经很棒了”。我想知道：让你累的，是事情太多，还是每件事你都想赢？','你说烦。烦通常不是因为事情难，而是你明明知道该怎么做，却不想做。是哪一件？'],
+  money:['这东西你想要，我信。问题是：你要的是它，还是买下它那一刻“我配得上”的感觉？后面那个，一般撑不过一个月。','钱的问题，十有八九不是钱的问题。你算的是账，怕的是什么？'],
+  family:['你说“他们不理解我”。我换个问法：你是希望他们理解，还是希望他们同意？这两个，差得很远。','你每次提到家里，都先替他们解释一句。你替他们解释的时候，谁来替你解释？'],
+  advice:['好。把两个选项都说出来——别只说你想要的那个。','假设明天就必须定，不许再拖，你会选哪个？别想，直接说。','选完那一刻，你是松了口气，还是有点可惜？那份可惜，就是你真正在乎的东西。'],
+  fallback:['你刚才那句话里有个词我想停一下——你说的“应该”，是谁的应该？','不是我不懂你的意思，而是我觉得你绕开了一个问题：如果这件事没人知道，你还会这么在意吗？','你讲了好几个理由。最后一个你说得最快。通常说得最快的那个，才是真的。','我先不站队。你先告诉我，你最怕的结果是什么——不是最坏的，是最怕的。']
+ },
+ pingzuo:{
+  work:['被工作压着的那种累，我懂一点。不是事情多，是每天醒来都要先说服自己一遍。今晚先不想要不要走，行吗？','你说想辞职。我不劝你辞，也不劝你留。我就想知道，你上一次上班觉得“还行”，是什么时候？'],
+  love:['有些人只是陪你走了一段路，但那段路是真的。不用急着把它算成值得或者不值得。','你说你还在想他。想就想吧，又不犯法。想，不代表要回去。'],
+  tired:['累了就先躺着。今晚可以不成长，不复盘，不想明天。我在这儿。','你不用现在就好起来。好起来这件事，没有截止日期。'],
+  money:['钱的事，最磨人的不是少，是每次花的时候都要跟自己吵一架。','我还债那几年，最怕的不是穷，是半夜醒来算账。你最近半夜醒过吗？'],
+  family:['家里的事最难说，说出来像在怪他们，不说又憋着。你在这儿说，不算怪谁。','我跟我女儿也有好一阵不怎么说话。后来才发现，不是没话说，是都怕说错。'],
+  fallback:['嗯，我在听。','这件事，你跟别人说过吗？还是第一次说出来？','说到这儿，你现在心里是什么感觉？说个大概就行。','不急。你慢慢说，书店也关门了，我不赶时间。','有些话说出来不是为了解决，就是为了让它不只待在你心里。']
+ }
+};
+var cnt={};
+function fromPool(pid,k){var key=pid+k;cnt[key]=(cnt[key]||0)+1;var a=POOL[pid][k];return a[(cnt[key]-1)%a.length]}
+function prof(){var A=analyze();var p=S.profile;return{mbti:S.pfb.mbti===-1?null:p.mbti,sign:S.pfb.sign===-1?null:A.sign,kw:A.kw}}
+function profileLine(pid){
+  var q=prof();
+  if(pid==='bange'&&q.mbti){var c=q.mbti.split('');
+    if(c[2]==='F')return '你说你不在乎。可按你的画像，你是重感受的人——真不在乎的人，不会把这件事讲三遍。';
+    if(c[3]==='J')return '你想要个确定的答案，我理解，画像里也写了你受不了悬着。但你急着要答案，是因为想清楚了，还是因为悬着太难受？';
+    if(c[3]==='P')return '你说再看看。你习惯给自己留余地——可余地留多了，不选也是一种选。';
+    return '你把理由讲得很清楚，讲道理是你的长项。可道理讲得越清楚，你越不肯承认自己其实是舍不得，对吧？';
+  }
+  if(pid==='pingzuo'&&q.mbti){var c2=q.mbti.split('');
+    if(c2[0]==='I')return '你平时应该不太跟人说这些吧。能说出来，挺好的。';
+    if(c2[2]==='F')return '你是那种先顾别人感受的人。今天在这儿，先顾顾你自己。';
+  }
+  if(pid==='pingzuo'&&q.sign&&ELEM[q.sign]==='水')return '心里的事来得深、去得慢，这不是毛病。慢慢来。';
+  return null;
+}
+var SAFE='我先停下来。你刚才说的话很重要，我想确认你现在是安全的。\n\n如果你有伤害自己的念头，请现在就联系身边信任的人，或拨打心理援助热线 12356；情况紧急请拨打 110 或 120。\n\n我在这里。你愿意说说，现在发生了什么吗？';
+
+async function replyBange(t){
+  if(S.listening){S.listening--;return say(S.listening?'嗯。……还有吗？':'我听到了。等你想听我说的时候，告诉我一声。')}
+  if(R.listen.test(t)){S.listening=2;return say('好，刀先收起来。不过你今晚要的可能不是我——想有人陪着说说，平坐更合适。也可以就在这儿说，我听着。',{handoff:'pingzuo'})}
+  if(R.real.test(t)||R.who.test(t))return say('我叫半格，是 AI。不是谁的替身，也不是哪个名人。我只做一件事：比你高半格，陪你把事情看清楚。');
+  if(R.tool.test(t))return say('这事你找个工具会比找我快。我只负责一件事：陪你把想不清楚的事想清楚。你今天有这样的事吗？');
+  if(R.push.test(t)){
+    if(R.reason.test(t)){S.hold=0;return say('这一点你说服我了。我刚才默认那是你自己选的；如果是被推着走的，问题就不是“你要不要”，而是“你有没有得选”。我们从这里重新来。')}
+    S.hold++;
+    if(S.hold>=3){S.hold=0;return say('这一点我已经说了两遍，不再重复。你可以不同意我——这不影响你做决定，决定本来就是你的。我们换个角度？')}
+    return say('你可以不同意，但你还没告诉我我错在哪。我换个说法再讲一遍：你在意的不是事情本身，是它说明了你是谁。你要是有我没考虑到的事实，摆出来，我认。');
+  }
+  if(R.thanks.test(t))return say('别急着谢。你说“懂了”，那我问你：懂了之后，你打算改什么？什么都不改的话，那叫听过，不叫懂了。');
+  if(R.hi.test(t))return say('在。今天不聊天气。说吧，什么事让你想了不止一遍？');
+  if(R.advice.test(t))return say(fromPool('bange','advice'));
+  var k=topicKey(t);if(k)return say(fromPool('bange',k));
+  var pl=S.userCount.bange%3===2?profileLine('bange'):null;
+  return say(pl||fromPool('bange','fallback'));
+}
+async function replyPingzuo(t){
+  if(R.listen.test(t))return say('好，那我就听着。你说。');
+  if(R.real.test(t))return say('不是。我是 AI 演的一个虚构的人。书店、外贸、还债那些，都是设定，不是真的。但我陪你说话这件事，是真的。');
+  if(R.who.test(t))return say('我叫平坐，一个开旧书店的中年人——当然，这是设定，我是 AI 演的。我没什么本事，就是坐在这儿，陪你说一会儿话。');
+  if(R.exp.test(t))return say('有过差不多的。那年我做外贸的公司倒了，欠了一身债，花了五年才还清。那几年我也不太跟人说话。所以你现在这样，我大概能懂一点。\n\n（这是平坐的虚构设定。）');
+  if(R.tool.test(t))return say('这个我帮不上，真的。我就会一件事，陪你说说话。今天过得怎么样？');
+  if(R.curse.test(t))return say('你生气，我听得出来，这口气是真的。他是什么样的人，我不替你下结论，你比我清楚。我就想知道，这口气憋了多久了？');
+  if(R.advice.test(t))return say('我也不知道你该怎么办。说实话，很多事我到现在也没想明白。不是每件事都要今晚有答案。\n\n要是你想有人帮你一条条拆开，半格比我擅长。',{handoff:'bange'});
+  if(R.thanks.test(t))return say('不用谢。能说出来，已经比憋着好一点了。');
+  if(R.hi.test(t))return say('来了啊。坐。今天怎么样？');
+  var k=topicKey(t);if(k)return say(fromPool('pingzuo',k));
+  var pl=S.userCount.pingzuo%3===2?profileLine('pingzuo'):null;
+  return say(pl||fromPool('pingzuo','fallback'));
+}
+async function handle(t){
+  S.busy=true;setSend();
+  push({role:'user',text:t});S.userCount[S.cur]++;
+  try{
+    if(R.crisis.test(t))await say(SAFE,{role:'safety',wait:600});
+    else if(S.cur==='bange')await replyBange(t);
+    else{
+      await replyPingzuo(t);
+      if(S.userCount.pingzuo>0&&S.userCount.pingzuo%10===0)await say('说了这么多，我想问一句：这些话，你今天跟身边的人说过吗？我在这儿挺好，但别只在这儿。');
+    }
+  }finally{S.busy=false;setSend()}
+}
+async function talkHot(t){S.busy=true;setSend();push({role:'user',text:'聊聊这个：'+t.title});await say(t[S.cur][1]);S.busy=false;setSend()}
+
+/* ================= 进入对话 ================= */
+function pickHot(){
+  var sel=TOPICS.filter(function(t){return S.hotSel.indexOf(t.id)>-1});if(!sel.length)return null;
+  var match=sel.filter(function(t){return S.interests.indexOf(t.tag)>-1}),list=match.length?match:sel;
+  return list[new Date().getDate()%list.length];
+}
+function greeting(id){
+  var q=prof(),nick=S.user?S.user.nick:'';
+  if(id==='bange'){
+    var tags=[q.mbti,q.sign?q.sign+'座':null].filter(Boolean);
+    return nick+'。'+(tags.length?'我看了你的画像，'+tags.join('、')+'。先说好，标签我只信一半，另一半看你接下来说什么。':'')+'今天是什么事，让你想了不止一遍？';
+  }
+  return nick+'，来了啊。'+(q.kw.length>=2?'看了眼你的画像，说你'+q.kw[0]+'、'+q.kw[1]+'。像不像不要紧，':'')+'今天不用说什么大事，随便说说就行。';
+}
+var inMsg=$('#in-msg');
+function setSend(){$('#btn-send').disabled=S.busy||!inMsg.value.trim()}
+async function openChat(id,push_){
+  if(S.busy&&id!==S.cur)return;
+  if(id!==S.cur)stopSpeak();
+  S.cur=id;S.hold=0;S.listening=0;
+  stack=['home','chat'];show('chat');paintVoiceBtn();
+  var p=P[id];
+  $('#chat-av').innerHTML=avatarSVG(id,38,true);
+  $('#chat-name').innerHTML=esc(p.name)+' <span class="tag '+p.tg+'">'+p.kind+'</span>';
+  $('#chat-sub').textContent=p.sub;
+  inMsg.placeholder=id==='bange'?'说说你在想的事…':'想说什么都行…';
+  renderAll();renderSuggest();setSend();
+  if(S.entered[id])return;S.entered[id]=true;
+  S.busy=true;setSend();
+  if(!S.logs[id].filter(function(m){return m.role==='ai'}).length)await say(greeting(id),{wait:500});
+  else if(S.callback[id]){await say((id==='bange'?'上次你聊到：':'上次你说起')+S.callback[id]+(id==='bange'?' 后来怎么样了？':' 后来还好吗？'),{wait:600});S.callback[id]=null;store.set('callback',S.callback)}
+  if(S.hotShown[id]!==today()){var t=pickHot();if(t&&S.cur===id){await sleep(400);push({role:'hot',topic:t.id});await say(t[id][0],{wait:700});S.hotShown[id]=today();store.set('hotShown',S.hotShown)}}
+  S.busy=false;setSend();
+}
+$('#btn-home').addEventListener('click',goHome);
+function renderSuggest(){var box=$('#suggest');box.innerHTML='';P[S.cur].sug.forEach(function(s){var b=document.createElement('button');b.textContent=s;b.addEventListener('click',function(){if(!S.busy)handle(s)});box.appendChild(b)})}
+inMsg.addEventListener('input',function(){inMsg.style.height='auto';inMsg.style.height=Math.min(120,inMsg.scrollHeight)+'px';setSend()});
+inMsg.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
+$('#btn-send').addEventListener('click',send);
+function send(){var t=inMsg.value.trim();if(!t||S.busy)return;inMsg.value='';inMsg.style.height='auto';setSend();handle(t)}
+
+/* ================= 菜单 / 结束对话 ================= */
+var mask=$('#mask');
+function openSheet(id){closeSheets();mask.classList.add('on');$(id).classList.add('on')}
+function closeSheets(){mask.classList.remove('on');$$('.sheet').forEach(function(s){s.classList.remove('on')})}
+mask.addEventListener('click',closeSheets);
+$('#btn-menu').addEventListener('click',function(){
+  var o=P[other(S.cur)];
+  var vc=S.voice[S.cur];
+  $('#menu-items').innerHTML='<button class="menu-item" data-go="switch">换成'+o.name+'聊<small>'+o.kind+'</small></button><button class="menu-item" data-go="voice">'+P[S.cur].name+'的声音<small>'+(vc.gender==='male'?'男声':'女声')+' · '+vc.cps.toFixed(1)+' 字/秒</small></button><button class="menu-item" data-go="portrait">我的性格画像</button><button class="menu-item" data-go="mem">它们记得的事</button><button class="menu-item" data-go="end">结束本次对话</button><button class="menu-item" data-go="set">设置</button>';
+  openSheet('#sh-menu');
+});
+$('#menu-items').addEventListener('click',function(e){
+  var b=e.target.closest('[data-go]');if(!b)return;var g=b.dataset.go;
+  if(g==='end'){openSheet('#sh-end');resetEnd();return}
+  if(g==='voice'){openVoiceSheet(S.cur);return}
+  closeSheets();
+  if(g==='switch'){if(!S.busy)openChat(other(S.cur),true);return}
+  nav(g);
+});
+var rating=0;
+function resetEnd(){rating=0;$('#end-note').value='';$$('#rate button').forEach(function(b){b.classList.remove('on')});$('#btn-end').disabled=true}
+$('#rate').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;rating=+b.dataset.v;$$('#rate button').forEach(function(x){x.classList.toggle('on',x===b)});$('#btn-end').disabled=false});
+$('#btn-end').addEventListener('click',async function(){
+  var id=S.cur,log=S.logs[id],lastUser=log.filter(function(m){return m.role==='user'}).slice(-1)[0];
+  S.sessions.push({id:uid(),persona:id,t:Date.now(),rating:rating,note:$('#end-note').value.trim(),msgs:log.filter(function(m){return m.role==='user'||m.role==='ai'}).length});
+  if(lastUser){var txt=lastUser.text.length>24?lastUser.text.slice(0,24)+'…':lastUser.text;
+    S.memories.unshift({id:uid(),text:'你聊到「'+txt+'」。',t:new Date().toLocaleDateString('zh-CN'),from:id});
+    S.callback[id]='「'+txt+'」。';store.set('callback',S.callback)}
+  save();closeSheets();push({role:'divider',text:'本次对话已结束'});
+  S.busy=true;setSend();
+  if(id==='bange')await say(rating<=2?'这次没帮上你，我记下了。下次换个问法。':'我记下了。下次见面，我会问你后来怎么样了。',{wait:500});
+  else await say(rating<=2?'今天没陪好你，抱歉。改天再来坐坐。':'好。今天就到这儿，早点睡。改天再来坐坐。',{wait:500});
+  S.busy=false;setSend();toast('感谢反馈');
+});
+
+/* ================= 记忆 ================= */
+function renderMem(){
+  var box=$('#mem-list');
+  if(!S.memories.length){box.innerHTML='<div class="empty">还没有。在对话页菜单里“结束本次对话”后，会记下你说过的重要的事。</div>';return}
+  box.innerHTML='<div class="group"></div>';var g=box.firstChild;
+  S.memories.forEach(function(m){
+    var it=document.createElement('div');it.className='item';
+    it.innerHTML='<div class="grow"></div><button class="del">删除</button>';
+    it.querySelector('.grow').innerHTML=esc(m.text)+'<small>'+esc(m.t)+' · 和'+esc(P[m.from]?P[m.from].name:'')+'聊时记下</small>';
+    it.querySelector('.del').addEventListener('click',function(){S.memories=S.memories.filter(function(x){return x!==m});save();renderMem();toast('已删除')});
+    g.appendChild(it);
+  });
+}
+
+/* ================= 设置 ================= */
+function renderChips(box){
+  box.innerHTML='';
+  INTERESTS.forEach(function(n){var b=document.createElement('button');b.className='chip'+(S.interests.indexOf(n)>-1?' on':'');b.textContent=n;
+    b.addEventListener('click',function(){var i=S.interests.indexOf(n);if(i>-1)S.interests.splice(i,1);else S.interests.push(n);store.set('interests',S.interests);renderChips(box)});box.appendChild(b)});
+}
+var clearArmed=false;
+function renderSet(){renderChips($('#set-chips'));renderSetVoice();clearArmed=false;$('#clear-hint').textContent='清空后不可恢复'}
+$('#btn-set-profile').addEventListener('click',function(){fillForm();$('#btn-login').textContent='重新生成画像';stack=[];show('login',true)});
+$('#btn-export').addEventListener('click',function(){
+  try{var data={exportedAt:new Date().toISOString(),user:S.user,profile:S.profile,portraitFeedback:S.pfb,logs:S.logs,memories:S.memories,sessions:S.sessions};
+    var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download='mylife-'+today()+'.json';
+    document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove()},500);toast('已导出')}catch(e){toast('当前浏览器不支持导出')}
+});
+$('#btn-clear').addEventListener('click',function(){
+  if(!clearArmed){clearArmed=true;$('#clear-hint').textContent='再点一次确认清空';return}
+  S.logs={bange:[],pingzuo:[]};S.sessions=[];S.memories=[];S.callback={};S.hotShown={};S.entered={};S.userCount={bange:0,pingzuo:0};
+  store.set('callback',{});store.set('hotShown',{});save();toast('已清空');renderSet();
+});
+$('#btn-logout').addEventListener('click',function(){store.clear();location.reload()});
+$('#btn-admin').addEventListener('click',function(){renderAdmin('log');show('admin',true)});
+
+/* ================= 后台 ================= */
+var adminP='bange';
+$('#admin-tabs').addEventListener('click',function(e){var b=e.target.closest('button');if(b)renderAdmin(b.dataset.t)});
+function pchips(){return '<div class="chips" style="margin-bottom:12px">'+['bange','pingzuo'].map(function(id){return '<button class="chip'+(adminP===id?' on':'')+'" data-p="'+id+'">'+P[id].name+'（'+P[id].kind+'）</button>'}).join('')+'</div>'}
+function bindP(tab){$$('#admin-body [data-p]').forEach(function(b){b.addEventListener('click',function(){adminP=b.dataset.p;renderAdmin(tab)})})}
+function renderAdmin(tab){
+  $$('#admin-tabs button').forEach(function(b){b.classList.toggle('on',b.dataset.t===tab)});
+  var body=$('#admin-body'),h='';
+  if(tab==='log'){
+    var log=S.logs[adminP],ai=log.filter(function(m){return m.role==='ai'});
+    var up=ai.filter(function(m){return m.fb===1}).length,down=ai.filter(function(m){return m.fb===-1});
+    var ss=S.sessions.filter(function(s){return s.persona===adminP});
+    var avg=ss.length?(ss.reduce(function(a,s){return a+s.rating},0)/ss.length).toFixed(1):'–';
+    h=pchips()+'<p class="note">正式版可看到所有内测用户。原型只展示本机数据。</p><div class="section-t">概览</div>';
+    h+='<div class="stat"><div><b>'+log.filter(function(m){return m.role==='user'}).length+'</b><span>用户发言</span></div><div><b>'+up+'</b><span>点赞</span></div><div><b>'+down.length+'</b><span>点踩</span></div><div><b>'+avg+'</b><span>聊完感觉</span></div></div>';
+    h+='<div class="section-t">被点踩的回复（优先改人格档案）</div><div class="group">'+(down.length?down.map(function(m){return '<div class="log-line">'+esc(m.text)+'</div>'}).join(''):'<div class="log-line" style="color:var(--ink-3)">暂无</div>')+'</div>';
+    h+='<div class="section-t">会话反馈</div><div class="group">'+(ss.length?ss.slice().reverse().map(function(s){return '<div class="log-line"><span class="r">'+['','更糟','有点糟','差不多','好一点','更好'][s.rating]+'</span>'+s.msgs+' 条消息'+(s.note?' · '+esc(s.note):'')+'</div>'}).join(''):'<div class="log-line" style="color:var(--ink-3)">暂无</div>')+'</div>';
+    var lines=log.filter(function(m){return m.role==='user'||m.role==='ai'||m.role==='safety'});
+    h+='<div class="section-t">完整记录</div><div class="group">'+(lines.length?lines.map(function(m){var u=m.role==='user';return '<div class="log-line"><span class="r" style="color:'+(u?'var(--ink)':P[adminP].color)+'">'+(u?'用户':P[adminP].name)+'</span>'+esc(m.text)+(m.fb===1?' 👍':m.fb===-1?' 👎':'')+'</div>'}).join(''):'<div class="log-line" style="color:var(--ink-3)">暂无</div>')+'</div><div style="height:24px"></div>';
+    body.innerHTML=h;bindP(tab);
+  }
+  if(tab==='persona'){
+    h=pchips()+'<p class="note">人格档案就是系统提示词。正式版里改完立即生效，不用发版；原型中保存后不影响预设回复。</p><div style="height:12px"></div><textarea class="persona-ta" id="persona-ta"></textarea><div style="height:12px"></div><button class="btn" id="persona-save">保存</button><div style="height:8px"></div><button class="btn ghost" id="persona-reset">恢复默认</button><div style="height:24px"></div>';
+    body.innerHTML=h;bindP(tab);$('#persona-ta').value=S.ptext[adminP];
+    $('#persona-save').addEventListener('click',function(){S.ptext[adminP]=$('#persona-ta').value;store.set('ptext',S.ptext);toast('已保存')});
+    $('#persona-reset').addEventListener('click',function(){S.ptext[adminP]=PERSONA_TEXT[adminP];store.set('ptext',S.ptext);$('#persona-ta').value=S.ptext[adminP];toast('已恢复默认')});
+  }
+  if(tab==='user'){
+    var p=S.profile,A=analyze();
+    var rows=[['昵称',S.user&&S.user.nick],['邀请码',S.user&&S.user.code],['生日',p.date],['出生时间',p.time||p.slot],['出生城市',p.city],['MBTI',p.mbti],['血型',p.blood]];
+    h='<p class="note">两个人格共用这份画像。用户标了“不像我”的条目，人格不会再引用。</p><div class="section-t">原始资料</div><div class="group">'+rows.map(function(r){return '<div class="item"><div class="grow">'+esc(r[0])+'<small>'+esc(r[1]||'未填')+'</small></div></div>'}).join('')+'</div>';
+    h+='<div class="section-t">画像条目与用户反馈</div><div class="group">'+A.items.map(function(it){var f=S.pfb[it.key];return '<div class="item"><div class="grow">'+esc(it.label)+(it.sample?'（示例）':'')+'<small>'+esc(it.text)+'</small></div><span class="tag">'+(it.miss?'未填':f===1?'像我':f===-1?'不像我':'未标')+'</span></div>'}).join('')+'</div><div style="height:24px"></div>';
+    body.innerHTML=h;
+  }
+  if(tab==='voice'){
+    h='<p class="note">正式版由服务器调用 TTS，密钥不放在网页里。原型不调用云端，下面的厂商选择仅作演示。</p><div class="section-t">TTS 厂商</div><div class="chips" id="tts-prov">'+
+      [['tencent','腾讯云'],['aliyun','阿里云']].map(function(p){return '<button class="chip'+(S.ttsProvider===p[0]?' on':'')+'" data-v="'+p[0]+'">'+p[1]+'</button>'}).join('')+'</div>';
+    h+='<div class="section-t">各人格的声音（用户设置）</div><div class="group">'+['bange','pingzuo'].map(function(id){var c=S.voice[id],mul=c.cps/TTS.BASE;
+      return '<div class="item"><div class="grow">'+P[id].name+'：'+(c.gender==='male'?'男声':'女声')+' · 目标每秒 '+c.cps.toFixed(1)+' 字<small>约为默认语速的 '+mul.toFixed(2)+' 倍（按默认约 4 字/秒估算；各音色默认语速不同，上线前需逐个实测校准）'+(S.measured[id]?' · 本机实测 '+S.measured[id].toFixed(1)+' 字/秒':'')+'</small></div></div>'}).join('')+'</div>';
+    h+='<div class="section-t">本机可用的中文音色（原型用）</div><div class="group">'+(TTS.voices.length?TTS.voices.map(function(v){var g=guessGender(v);return '<div class="item"><div class="grow">'+esc(v.name)+'<small>'+esc(v.lang)+'</small></div><span class="tag">'+(g==='male'?'男':g==='female'?'女':'未知')+'</span></div>'}).join(''):'<div class="item"><div class="grow">没有检测到中文音色<small>'+(TTS.ok?'可能还在加载，稍后再打开这一页':'这个浏览器不支持语音合成')+'</small></div></div>')+'</div><div style="height:24px"></div>';
+    body.innerHTML=h;
+    body.querySelectorAll('#tts-prov .chip').forEach(function(b){b.addEventListener('click',function(){S.ttsProvider=b.dataset.v;store.set('ttsProvider',S.ttsProvider);renderAdmin('voice');toast('已切换为'+b.textContent+'（原型演示）')})});
+  }
+  if(tab==='hot'){
+    h='<p class="note">脚本每天抓热榜，管理员勾选 3–5 条。两个人格当天第一次被打开时，各自用自己的方式拿其中一条开口。以下为示例数据，不涉及真实人物。</p><div class="section-t">候选热点</div><div class="group">';
+    TOPICS.forEach(function(t){h+='<label class="item"><input type="checkbox" class="check" data-id="'+t.id+'"'+(S.hotSel.indexOf(t.id)>-1?' checked':'')+'><div class="grow">'+esc(t.title)+'<small>'+esc(t.tag)+' · 半格：'+esc(t.bange[0].slice(0,22))+'… · 平坐：'+esc(t.pingzuo[0].slice(0,22))+'…</small></div></label>'});
+    h+='</div><div style="height:16px"></div><button class="btn ghost" id="hot-replay">让今天的热点开场再出现一次</button><div style="height:24px"></div>';
+    body.innerHTML=h;
+    body.querySelectorAll('.check').forEach(function(c){c.addEventListener('change',function(){var id=c.dataset.id;if(c.checked){if(S.hotSel.indexOf(id)<0)S.hotSel.push(id)}else S.hotSel=S.hotSel.filter(function(x){return x!==id});store.set('hotSel',S.hotSel)})});
+    $('#hot-replay').addEventListener('click',function(){S.hotShown={};S.entered={};store.set('hotShown',{});toast('已重置，回到首页看看');});
+  }
+}
+
+/* ================= 启动 ================= */
+if(!S.user){stack=['login'];show('login')}
+else goHome();
+})();
+</script>
+</body>
+</html>
