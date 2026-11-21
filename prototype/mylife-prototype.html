@@ -214,7 +214,13 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .row.rainbow.gone{opacity:0;transform:scale(.96);transition:opacity .25s,transform .25s}
 @keyframes rbfloat{50%{transform:translateY(-3px)}}
 @keyframes rbnudge{50%{transform:translateY(-6px)}}
-.rbx:focus-visible .back{box-shadow:0 0 0 2px var(--acc)}
+.rbx:focus-visible .back{outline:2px solid var(--acc);outline-offset:2px}
+.rbx .rb{z-index:2}
+.row.rainbow.closed .rbx::before,.row.rainbow.closed .rbx::after{content:'';position:absolute;inset:0;z-index:0;border-radius:18px;background:var(--surface-hi);border:1px solid var(--glass-line);box-shadow:0 4px 14px rgba(84,74,140,.06)}
+.row.rainbow.closed .rbx::before{transform:translate(7px,7px) rotate(2.5deg)}
+.row.rainbow.closed .rbx::after{transform:translate(3.5px,3.5px) rotate(1.2deg)}
+.rb-again{font-size:12.5px;color:var(--ink-3);margin-top:8px;padding:6px 12px;border-radius:14px;letter-spacing:.06em}
+.rb-again:active{background:var(--surface-2)}
 .rb{position:absolute;inset:0;overflow:hidden;border-radius:18px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:16px 18px 14px;
   background:var(--surface-hi);border:1px solid var(--glass-line);box-shadow:0 6px 20px rgba(84,74,140,.08);color:var(--ink);
   -webkit-backface-visibility:hidden;backface-visibility:hidden;transition:transform .65s cubic-bezier(.2,.7,.2,1)}
@@ -361,7 +367,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   <p>回复由大模型实时生成（模型在后台固定）；服务器不可用时退回预设脚本。八字、紫微、占星为示例文字，正式版由排盘程序计算。聊天记录存在本机浏览器；长期记忆和对话内容存在服务器上（对话留存供内测团队查看）。</p>
   <p>语音朗读由服务器调用腾讯云语音合成。每个人格可单独选音色（男女声各 6 个）、调语速（默认每秒 5.6 字）。直接打开本地文件时，退回本机自带的语音合成。对话页可以切到“按住说话”，语音经腾讯云转成文字后发送，不保存录音。</p>
   <p>界面：粉彩天空、平静水面、几何台阶，人物在场景里看着你说话；插画为原创几何风格。跟随系统深色模式切换成黄昏配色。</p>
-  <p>每天第一次进对话会出现一张彩虹卡（49 张原创短句），翻开后“另一个你”接着它开个头；不想抽可以直接说话。</p>
+  <p>彩虹卡：进对话时，聊天卡片里放着一叠卡（49 张原创短句），点一下随机抽一张，“另一个你”接着它开个头；抽完可以“再抽一张”，不想抽就直接说话。</p>
   <p>点“结束本次对话”时，人格先用一句话把这次聊的收住（句式从公开平台的高赞回复里提炼），再请你打分。回复下的赞和踩会记到服务器，用来继续调这句话。</p>
   <p>定位：两个人格都是用户的“另一个自己”，半格是更清醒的你，平坐是更温柔的你。说话方式参考了两种公开的表达风格，不包含任何真人的经历和观点。长期记忆存在服务器上（按设备匿名，不用注册），聊得越久越像你；场景里的人物也会从淡淡的轮廓慢慢变清楚。</p>
   <p>“半格”“平坐”为占位名。</p>
@@ -1079,8 +1085,8 @@ function goHome(){
   var box=$('#home-cards');box.innerHTML='';
   ['bange','pingzuo'].forEach(function(id){
     var p=P[id],c=document.createElement('button');c.className='pcard '+p.cls;
-    var lt=lastText(id),fresh=CHAT.ok&&S.cardDay!==today();
-    c.innerHTML=(fresh?'<span class="dot tag '+p.tg+'">今天的彩虹卡</span>':'')+'<div class="thumb">'+sceneSVG(id,{vb:THUMB_VB[id],par:'xMidYMid slice'})+'</div><div class="top"><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+'</div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
+    var lt=lastText(id);
+    c.innerHTML=''+'<div class="thumb">'+sceneSVG(id,{vb:THUMB_VB[id],par:'xMidYMid slice'})+'</div><div class="top"><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+'</div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
     c.addEventListener('click',function(){openChat(id,true)});
     box.appendChild(c);
   });
@@ -1111,8 +1117,8 @@ function nodeFor(m){
   else if(m.role==='rainbow'){
     var c=cardById(m.card);if(!c){row.style.display='none';return row}
     var col=colorOf(c);row.className='row rainbow'+(m.opened?'':' closed');
-    row.innerHTML='<div class="rbx'+(m.opened?' turned':'')+'"'+(m.opened?'':' role="button" tabindex="0" aria-label="翻开今天的彩虹卡"')+'>'
-      +'<div class="rb face back"><span>彩虹卡</span><b>点一下，翻开</b></div>'
+    row.innerHTML='<div class="rbx'+(m.opened?' turned':'')+'"'+(m.opened?'':' role="button" tabindex="0" aria-label="抽一张彩虹卡"')+'>'
+      +'<div class="rb face back"><span>彩虹卡</span><b>点一下，抽一张</b></div>'
       +'<div class="rb face front" style="--rb:'+col.hex+'"><span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p></div></div>'
       +(m.opened?'':'<button class="rb-skip" type="button">先不抽，直接聊</button>');
     row.querySelector('.front p').textContent=c.t;
@@ -1155,7 +1161,7 @@ new MutationObserver(function(){
 }).observe(msgs,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
 function markLast(){var r=msgs.querySelectorAll('.row.ai[data-id]');r.forEach(function(x,i){x.classList.toggle('last',i===r.length-1)})}
 function paintSuggest(){$('#suggest').style.display=sessionMsgs(S.cur).some(function(m){return m.role==='user'})?'none':''}
-function renderAll(){msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});markLast();paintSuggest();scrollDown()}
+function renderAll(){msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});markLast();paintSuggest();paintAgain();scrollDown()}
 function push(m){m.id=m.id||uid();m.t=Date.now();S.logs[S.cur].push(m);save();var n=nodeFor(m);msgs.appendChild(n);if(m.role==='ai')markLast();if(m.role==='user')paintSuggest();scrollDown();return n}
 function typeInto(el,text,done,sp){var i=0;var tm=setInterval(function(){i+=2;el.textContent=text.slice(0,i);scrollDown();if(i>=text.length){clearInterval(tm);done&&done()}},sp||28)}
 async function say(text,opts){
@@ -1277,10 +1283,22 @@ function cardById(id){return CARDS?CARDS.cards.filter(function(c){return c.id===
 function colorOf(c){return CARDS.colors.filter(function(x){return x.key===c.c})[0]||{name:'',theme:'',hex:'#ddd'}}
 function pickCard(){var pool=CARDS.cards.filter(function(c){return S.cardHist.indexOf(c.id)<0});if(!pool.length){S.cardHist=[];pool=CARDS.cards}
   var c=pool[Math.floor(Math.random()*pool.length)];S.cardHist=S.cardHist.concat(c.id).slice(-21);store.set('cardHist',S.cardHist);return c}
-function offerCard(){
-  if(!CARDS)return;var open=$('#msgs .row.rainbow.closed');
-  if(open){open.scrollIntoView({behavior:'smooth',block:'center'});open.classList.remove('nudge');void open.offsetWidth;open.classList.add('nudge');return}
-  push({role:'rainbow',card:pickCard().id,opened:false});
+function offerCard(){if(CARDS&&!$('#msgs .row.rainbow.closed'))push({role:'rainbow',card:pickCard().id,opened:false})}
+function drawCard(){
+  if(!CARDS||S.busy)return;
+  $$('#msgs .rb-again').forEach(function(x){x.parentNode.removeChild(x)});
+  var waiting=S.logs[S.cur].filter(function(x){return x.role==='rainbow'&&!x.opened})[0];
+  var m=waiting||{role:'rainbow',card:pickCard().id,opened:false};
+  var row=waiting?msgs.querySelector('[data-id="'+m.id+'"]'):push(m);
+  if(row){row.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(function(){openCard(m,row)},waiting?250:450)}
+}
+// 最近抽开的那张卡下面放一个“再抽一张”
+function paintAgain(){
+  $$('#msgs .rb-again').forEach(function(b){b.remove()});
+  if($('#msgs .row.rainbow.closed'))return;
+  var r=msgs.querySelectorAll('.row.rainbow:not(.closed)');if(!r.length)return;
+  var b=document.createElement('button');b.type='button';b.className='rb-again';b.textContent='再抽一张';
+  b.addEventListener('click',function(){drawCard()});r[r.length-1].appendChild(b);
 }
 async function openCard(m,row){
   var c=cardById(m.card);if(!c||m.opened||S.busy)return;
@@ -1293,7 +1311,7 @@ async function openCard(m,row){
   var ty=document.createElement('div');ty.className='row ai';ty.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';msgs.appendChild(ty);scrollDown();
   var text=await req;ty.remove();
   if(S.cur===pid)await say(text||c.q,{wait:1});
-  S.busy=false;setSend();askVoice();
+  S.busy=false;setSend();paintAgain();askVoice();
 }
 // 没翻开的卡：直接开口说话、或点“先不抽”，就收起来，不挡路
 function dropCard(){
@@ -1419,11 +1437,12 @@ async function openChat(id,push_){
   inMsg.placeholder=id==='bange'?'说说你在想的事…':'想说什么都行…';
   renderAll();renderSuggest();setSend();
   if(S.entered[id]){askVoice();return}S.entered[id]=true;
+  var lastT=S.logs[id].reduce(function(a,m){return Math.max(a,m.t||0)},0),newVisit=Date.now()-lastT>2*3600e3;
   S.busy=true;setSend();
   if(!S.logs[id].filter(function(m){return m.role==='ai'}).length)await say(greeting(id),{wait:500});
   else if(S.callback[id]){await say((id==='bange'?'上次你聊到：':'上次你说起')+S.callback[id]+(id==='bange'?' 后来怎么样了？':' 后来还好吗？'),{wait:600});S.callback[id]=null;store.set('callback',S.callback)}
   await cardsP;
-  if(CARDS&&S.cardDay!==today()&&S.cur===id){await sleep(400);S.cardDay=today();store.set('cardDay',S.cardDay);offerCard()}
+  if(CARDS&&newVisit&&S.cur===id&&!$('#msgs .row.rainbow.closed')){await sleep(400);offerCard()}
   S.busy=false;setSend();askVoice();
 }
 $('#btn-home').addEventListener('click',goHome);
@@ -1581,7 +1600,7 @@ $('#btn-menu').addEventListener('click',function(){
 $('#menu-items').addEventListener('click',function(e){
   var b=e.target.closest('[data-go]');if(!b)return;var g=b.dataset.go;
   if(g==='end'){closeSheets();endTalk();return}
-  if(g==='card'){closeSheets();if(!S.busy)offerCard();return}
+  if(g==='card'){closeSheets();drawCard();return}
   if(g==='hot'){closeSheets();if(!S.busy){var ht=pickHot();if(ht){push({role:'hot',topic:ht.id});say(ht[S.cur][0],{wait:700})}else toast('今天没有热点')}return}
   if(g==='voice'){openVoiceSheet(S.cur);return}
   closeSheets();
