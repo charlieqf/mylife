@@ -175,6 +175,10 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
 @keyframes dot{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 14px;max-width:92%}
+.vchoice{margin:4px auto;text-align:center}
+.vchoice p{font-size:14px;margin-bottom:10px}
+.vchoice .vbtns{display:flex;gap:8px;justify-content:center;margin-bottom:8px}
+.vchoice small{display:block;color:var(--ink-3);font-size:12px}
 .hot .tg{font-size:12px;font-weight:600;margin-bottom:4px}
 .hot h4{font-size:15px;line-height:1.45;margin-bottom:4px}
 .hot p{font-size:13px;color:var(--ink-2)}
@@ -496,7 +500,7 @@ var S={
   hotShown:store.get('hotShown',{}),callback:store.get('callback',{}),
   ptext:store.get('ptext',PERSONA_TEXT),
   voice:store.get('voice',{bange:{gender:'male',cps:5.6},pingzuo:{gender:'male',cps:5.6}}),
-  autoRead:store.get('autoRead',true),calib:store.get('calib',{}),measured:{},
+  autoRead:store.get('autoRead',null),calib:store.get('calib',{}),measured:{},
   cur:'bange',busy:false,hold:0,listening:0,userCount:{bange:0,pingzuo:0},entered:{}
 };
 function save(){store.set('logs',S.logs);store.set('memories',S.memories);store.set('sessions',S.sessions)}
@@ -622,7 +626,7 @@ document.addEventListener('click',function(){
 
 var ICON_VOL='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
 var ICON_MUTE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>';
-function paintVoiceBtn(){var b=$('#btn-voice');b.innerHTML=S.autoRead?ICON_VOL:ICON_MUTE;b.classList.toggle('off',!S.autoRead);b.setAttribute('aria-label',S.autoRead?'自动朗读：开':'自动朗读：关')}
+function paintVoiceBtn(){var vc=$('#msgs .vchoice');if(vc&&S.autoRead!==null)vc.remove();var b=$('#btn-voice');b.innerHTML=S.autoRead?ICON_VOL:ICON_MUTE;b.classList.toggle('off',!S.autoRead);b.setAttribute('aria-label',S.autoRead?'自动朗读：开':'自动朗读：关')}
 $('#btn-voice').addEventListener('click',function(){S.autoRead=!S.autoRead;store.set('autoRead',S.autoRead);paintVoiceBtn();if(!S.autoRead)stopSpeak();toast(S.autoRead?'回复会自动读出来':'已关闭自动朗读，可以点每条回复旁的喇叭单独听')});
 
 /* 声音设置弹层 */
@@ -1118,14 +1122,27 @@ async function openChat(id,push_){
   $('#chat-sub').textContent=p.sub;
   inMsg.placeholder=id==='bange'?'说说你在想的事…':'想说什么都行…';
   renderAll();renderSuggest();setSend();
-  if(S.entered[id])return;S.entered[id]=true;
+  if(S.entered[id]){askVoice();return}S.entered[id]=true;
   S.busy=true;setSend();
   if(!S.logs[id].filter(function(m){return m.role==='ai'}).length)await say(greeting(id),{wait:500});
   else if(S.callback[id]){await say((id==='bange'?'上次你聊到：':'上次你说起')+S.callback[id]+(id==='bange'?' 后来怎么样了？':' 后来还好吗？'),{wait:600});S.callback[id]=null;store.set('callback',S.callback)}
   if(S.hotShown[id]!==today()){var t=pickHot();if(t&&S.cur===id){await sleep(400);push({role:'hot',topic:t.id});await say(t[id][0],{wait:700});S.hotShown[id]=today();store.set('hotShown',S.hotShown)}}
-  S.busy=false;setSend();
+  S.busy=false;setSend();askVoice();
 }
 $('#btn-home').addEventListener('click',goHome);
+// 第一次进对话时问一次要不要把回复读出来（选过就记住；之后用右上角喇叭或设置里的开关改）
+function askVoice(){
+  if(S.autoRead!==null||$('#msgs .vchoice'))return;
+  var c=document.createElement('div');c.className='card vchoice';
+  c.innerHTML='<p>要把'+esc(P[S.cur].name)+'的回复读出来吗？</p><div class="vbtns"><button class="chip on" data-v="1">读出来</button><button class="chip" data-v="0">先不用</button></div><small>以后随时点右上角的喇叭开关</small>';
+  c.addEventListener('click',function(e){
+    var b=e.target.closest('[data-v]');if(!b)return;
+    S.autoRead=b.dataset.v==='1';store.set('autoRead',S.autoRead);paintVoiceBtn();renderSetVoice();c.remove();
+    if(S.autoRead){var last=S.logs[S.cur].filter(function(m){return m.role==='ai'}).slice(-1)[0];if(last)speak(last.text,S.cur,last.id)}
+    toast(S.autoRead?'好，回复会读出来':'好，先不出声。想听时点回复旁的喇叭');
+  });
+  msgs.appendChild(c);scrollDown();
+}
 function renderSuggest(){var box=$('#suggest');box.innerHTML='';P[S.cur].sug.forEach(function(s){var b=document.createElement('button');b.textContent=s;b.addEventListener('click',function(){if(!S.busy)handle(s)});box.appendChild(b)})}
 inMsg.addEventListener('input',function(){inMsg.style.height='auto';inMsg.style.height=Math.min(120,inMsg.scrollHeight)+'px';setSend()});
 inMsg.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
