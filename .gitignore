@@ -1,2 +1,9 @@
 # 客户原始资料，不进入公开仓库
 碎片化思路.txt
+
+# 本地密钥（部署到服务器 /etc/mylife/secrets.env），不进仓库
+.secrets/
+
+# 评测缓存与工具运行产物
+.eval-cache/
+__pycache__/
