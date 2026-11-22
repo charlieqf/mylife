@@ -24,7 +24,7 @@ def llm(msgs, max_tokens, temperature):
 
 
 def main():
-    mem = Memory(os.path.join(os.environ["MYLIFE_CACHE"], "users"), llm, {k: v[0] for k, v in srv.PERSONAS.items()})
+    mem = Memory(os.path.join(os.environ["MYLIFE_CACHE"], "users"), llm)
     uid = "demo" + secrets.token_hex(8)
     for pid, said in TALKS:
         hist = []

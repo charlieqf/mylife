@@ -24,6 +24,7 @@
   --shadow:0 10px 30px rgba(84,74,140,.10),0 1px 2px rgba(84,74,140,.05);
   --blur:saturate(140%) blur(18px);
   --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  --rb-veil:rgba(244,239,246,.76); --rb-card:#FDFBFE;
 }
 @media (prefers-color-scheme: dark){
   :root{
@@ -37,6 +38,7 @@
     --me-p:linear-gradient(135deg,#6C4E62 0%,#57496B 100%);
     --dawn:radial-gradient(90% 55% at 12% 0%,rgba(255,255,255,.05),transparent 70%),linear-gradient(165deg,#2C2848 0%,#393151 34%,#25384A 68%,#1D2039 100%);
     --shadow:0 10px 30px rgba(0,0,0,.28);
+    --rb-veil:rgba(20,20,38,.76); --rb-card:#2E2D4C;
   }
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -163,6 +165,18 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .pi .h b{font-size:14px;font-weight:500;flex:1}
 .pi p{font-size:14px;color:var(--ink-2);line-height:1.65}
 .pi.miss p{color:var(--ink-3)}
+/* 画像展开：星座、MBTI 各分几面细说；“放在一起看”“从你说过的话看”各一段 */
+.fx{margin:12px 0 2px;padding-top:12px;border-top:1px solid var(--line)}
+.fx dt{font-size:12px;letter-spacing:.14em;color:var(--ink-3);margin-top:12px}
+.fx dt:first-child{margin-top:0}
+.fx dd{margin:4px 0 0;font-size:14.5px;line-height:1.75;color:var(--ink);text-wrap:pretty}
+.pi.wide>p{font-size:14.5px;line-height:1.8;color:var(--ink);text-wrap:pretty}
+.pi.heard{background:radial-gradient(120% 90% at 0% 0%,color-mix(in srgb,var(--acc) 12%,transparent),transparent 60%),var(--surface)}
+.fx-wait{margin:12px 0 2px;padding-top:12px;border-top:1px solid var(--line);font-size:12.5px;letter-spacing:.08em;color:var(--ink-3)}
+.fx-wait i{display:block;height:10px;margin-top:9px;border-radius:5px;background:linear-gradient(90deg,var(--surface-2) 30%,var(--surface-hi) 50%,var(--surface-2) 70%);background-size:300% 100%;animation:fxwait 1.4s ease-in-out infinite}
+.fx-wait i:nth-child(2){width:86%}.fx-wait i:nth-child(3){width:64%}
+@keyframes fxwait{from{background-position:100% 0}to{background-position:0 0}}
+@media (prefers-reduced-motion: reduce){.fx-wait i{animation:none}}
 .yn{display:flex;gap:6px;margin-top:8px}
 .yn button{height:28px;padding:0 12px;border-radius:14px;border:1px solid var(--glass-line);background:var(--surface);font-size:12.5px;color:var(--ink-2)}
 .yn button.on{background:var(--ink);color:var(--on-ink);border-color:transparent}
@@ -187,8 +201,14 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 /* 对话 */
 #s-chat{--head:calc(56px + var(--safe-t));--acc:var(--b);--me:var(--me-b)}
 .stage-gap.fill{flex:1 1 auto;height:auto;min-height:40px}
-.panel.float{flex:0 1 auto;max-height:44%;margin:0 12px calc(12px + var(--safe-b));border-radius:26px;border:1px solid var(--glass-line);background:var(--card);box-shadow:var(--shadow)}
+.panel.float{flex:0 1 auto;max-height:44%;transition:max-height .32s cubic-bezier(.2,.7,.2,1);margin:0 12px calc(12px + var(--safe-b));border-radius:26px;border:1px solid var(--glass-line);background:var(--card);box-shadow:var(--shadow)}
 #s-chat #chat-scroll{flex:1 1 auto;min-height:0}
+/* 聊天卡片上拉全屏：拖顶上的小横条（或点一下），下拉还原 */
+.grip{flex:none;height:22px;margin-bottom:-6px;display:flex;justify-content:center;align-items:center;cursor:grab;touch-action:none;outline:none}
+.grip i{width:38px;height:4px;border-radius:2px;background:var(--ink-3);opacity:.4;transition:opacity .2s}
+.grip:hover i,.grip:focus-visible i{opacity:.75}
+#s-chat.full .stage-gap.fill{flex:0 0 0;min-height:6px}
+#s-chat.full .panel.float{max-height:100%;flex:1 1 auto}
 #s-chat .composer{padding-bottom:12px}
 #s-chat .suggest,#s-chat .composer{flex:none}
 #s-chat[data-p="pingzuo"]{--acc:var(--p);--me:var(--me-p)}
@@ -202,18 +222,29 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .row.me{align-items:flex-end}
 .row.ai{align-items:flex-start}
 .row.rainbow{align-self:center;align-items:center;margin:6px 0 2px;perspective:600px}
-.rbx{position:relative;width:196px;height:122px;perspective:900px;cursor:pointer;outline:none}
-.rbx.turned{cursor:default}
-.row.rainbow.closed .rbx{animation:rbfloat 3.6s ease-in-out infinite}
-.row.rainbow.nudge .rbx{animation:rbnudge .5s ease 2}
+.rbx{position:relative;width:196px;height:122px;perspective:900px;cursor:zoom-in;outline:none}
 .row.rainbow.gone{opacity:0;transform:scale(.96);transition:opacity .25s,transform .25s}
-@keyframes rbfloat{50%{transform:translateY(-3px)}}
+.rbx:focus-visible .front{outline:2px solid var(--acc);outline-offset:2px}
+/* 还没选：一排七种颜色，凭感觉点一个，从这个颜色里抽一张 */
+.rb-pick{position:relative;overflow:hidden;width:min(320px,calc(100vw - 56px));padding:18px 14px 14px;  /* 不按文字收窄：颜色要够大好点 */border-radius:18px;text-align:center;
+  background:var(--surface-hi);border:1px solid var(--glass-line);box-shadow:0 6px 20px rgba(84,74,140,.08)}
+.rb-pick::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#F3B9B2,#F6CCA8,#F3E0A2,#BFDDC4,#B9D4EC,#BBBFE6,#D6BFE4);opacity:.9}
+.rb-pick>span{display:block;font-size:11px;letter-spacing:.4em;padding-left:.4em;color:var(--ink-3)}
+.rb-pick>b{display:block;margin:8px 0 14px;font-size:14.5px;font-weight:400;letter-spacing:.1em;color:var(--ink-2)}
+.rb-dots{display:flex;justify-content:center;gap:4px}
+.rb-dot{flex:1 1 0;min-width:0;max-width:38px;display:flex;flex-direction:column;align-items:center;gap:6px;padding:2px 0 4px;font-size:11.5px;color:var(--ink-3);-webkit-tap-highlight-color:transparent;transition:opacity .3s}
+.rb-dot i{width:min(30px,100%);aspect-ratio:1;border-radius:50%;background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.75),transparent 55%),var(--rb);
+  box-shadow:inset 0 0 0 1px rgba(60,50,110,.06),0 3px 10px color-mix(in srgb,var(--rb) 75%,transparent);transition:transform .3s cubic-bezier(.2,.8,.2,1),box-shadow .3s;
+  animation:rbbob 4.2s ease-in-out calc(var(--k) * .14s) infinite}
+.rb-dot:active i{transform:scale(.9)}
+.rb-dot:focus-visible{outline:none}
+.rb-dot:focus-visible i{outline:2px solid var(--acc);outline-offset:3px}
+.rb-dots.picked .rb-dot{opacity:.3}
+.rb-dots.picked .rb-dot.on{opacity:1;color:var(--ink)}
+.rb-dots .rb-dot.on i{animation:none;transform:scale(1.3);box-shadow:0 0 0 5px color-mix(in srgb,var(--rb) 40%,transparent),0 4px 18px var(--rb)}
+.row.rainbow.nudge .rb-dot i{animation:rbnudge .5s ease calc(var(--k) * .05s) 2}
+@keyframes rbbob{0%,40%,100%{transform:none}20%{transform:translateY(-3px)}}
 @keyframes rbnudge{50%{transform:translateY(-6px)}}
-.rbx:focus-visible .back{outline:2px solid var(--acc);outline-offset:2px}
-.rbx .rb{z-index:2}
-.row.rainbow.closed .rbx::before,.row.rainbow.closed .rbx::after{content:'';position:absolute;inset:0;z-index:0;border-radius:18px;background:var(--surface-hi);border:1px solid var(--glass-line);box-shadow:0 4px 14px rgba(84,74,140,.06)}
-.row.rainbow.closed .rbx::before{transform:translate(7px,7px) rotate(2.5deg)}
-.row.rainbow.closed .rbx::after{transform:translate(3.5px,3.5px) rotate(1.2deg)}
 .rb-skip{font-size:12.5px;color:var(--ink-3);margin-top:8px;padding:6px 12px;border-radius:14px;letter-spacing:.06em}
 .rb-skip:active{background:var(--surface-2)}
 .rb{position:absolute;inset:0;overflow:hidden;border-radius:18px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:16px 18px 14px;
@@ -224,15 +255,62 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .rb.back b{font-size:14.5px;font-weight:400;margin-top:8px;letter-spacing:.12em;color:var(--ink-2)}
 .rb.front{transform:rotateY(180deg);background:radial-gradient(120% 90% at 0% 0%,color-mix(in srgb,var(--rb) 55%,transparent),transparent 62%),var(--surface-hi)}
 .rb.front::before{background:var(--rb)}
-.rbx.turned .back{transform:rotateY(-180deg)}
-.rbx.turned .front{transform:rotateY(0)}
+.rbx .front{transform:none}
 .rb-tag{display:flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.2em;color:var(--ink-3);margin-bottom:8px}
 .rb-tag::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--rb)}
-.rb.front p{font-size:16px;line-height:1.6;letter-spacing:.04em}
+.rb.front p{font-size:16px;line-height:1.6;letter-spacing:.04em;text-wrap:balance;word-break:keep-all;overflow-wrap:anywhere}  /* 卡上的短句尽量在标点处换行，不把词拆开 */
 /* 旁白：念卡时跟着声音一个字一个字出来 */
 .rb-say{max-width:240px;min-height:1.7em;margin:10px 0 0;font-size:13.5px;line-height:1.75;color:var(--ink-2);text-align:center;letter-spacing:.04em}
 .rb-say:empty{visibility:hidden}
-@media (prefers-reduced-motion: reduce){.rb{transition:none}.row.rainbow .rbx{animation:none!important}}
+.rb-say{text-wrap:pretty}
+/* 彩虹卡全屏：点开时卡从对话里浮到正中，亮一下，慢慢翻过来，四周散开一点彩色的光，旁白跟着声音出字；“收下”后飞回对话里。
+   翻开过的卡点一下也能放大看 */
+.rb-stage{position:absolute;inset:0;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  padding:calc(32px + var(--safe-t)) 24px calc(24px + var(--safe-b));visibility:hidden}
+.rb-stage.on{visibility:visible}
+.rb-veil{position:absolute;inset:0;background:radial-gradient(60% 45% at 50% 44%,color-mix(in srgb,var(--rb) 30%,transparent),transparent 72%),var(--rb-veil);
+  -webkit-backdrop-filter:blur(16px) saturate(1.15);backdrop-filter:blur(16px) saturate(1.15);opacity:0;transition:opacity .45s ease}
+.rb-stage.on .rb-veil{opacity:1}
+.rb-date{position:relative;font-size:12.5px;letter-spacing:.32em;padding-left:.32em;color:var(--ink-2);opacity:0;transition:opacity .6s ease .3s}
+.rb-stage.on .rb-date{opacity:1}
+.rb-big{position:relative;flex:none;width:min(290px,72vw,calc(48vh * .75));aspect-ratio:3/4;perspective:1400px}
+.rb-stage.entering .rb-big{animation:rbin .62s cubic-bezier(.2,.8,.2,1) both}
+.rb-big.pop{animation:rbpop 1s ease}
+.rb-stage.leaving .rb-veil,.rb-stage.leaving .rb-date,.rb-stage.leaving .rb-say,.rb-stage.leaving .rb-acts{opacity:0;transition:opacity .3s}
+.rb-stage.leaving .rb-big{animation:rbout .42s cubic-bezier(.4,0,.6,1) both}
+@keyframes rbin{from{transform:translate(var(--dx),var(--dy)) scale(var(--s));opacity:.2}to{transform:none;opacity:1}}
+@keyframes rbout{from{transform:none;opacity:1}to{transform:translate(var(--dx),var(--dy)) scale(var(--s));opacity:0}}
+@keyframes rbpop{40%{transform:scale(1.045)}}
+.rb-halo{position:absolute;inset:-24%;border-radius:50%;background:radial-gradient(closest-side,color-mix(in srgb,var(--rb) 80%,transparent),transparent);opacity:.22;transition:opacity 1.2s ease;pointer-events:none}
+.rb-big.turned .rb-halo{opacity:.9;animation:rbbreath 3.8s ease-in-out 1.2s infinite}
+@keyframes rbbreath{50%{transform:scale(1.07);opacity:.6}}
+.rb-big .rb{border-radius:24px;padding:30px 26px;background:var(--rb-card);box-shadow:0 22px 60px rgba(60,50,110,.2),0 2px 8px rgba(60,50,110,.08);transition-duration:1s}
+.rb-big .rb.back{background:radial-gradient(70% 55% at 50% 40%,color-mix(in srgb,var(--rb) 50%,transparent),transparent 72%),var(--rb-card)}  /* 背面带着他选的颜色 */
+.rb-big .rb.front{background:radial-gradient(120% 75% at 0% 0%,color-mix(in srgb,var(--rb) 60%,transparent),transparent 62%),radial-gradient(90% 60% at 100% 100%,color-mix(in srgb,var(--rb) 28%,transparent),transparent 62%),var(--rb-card)}
+.rb-big.turned .back{transform:rotateY(-180deg)}
+.rb-big.turned .front{transform:rotateY(0)}
+.rb-big .back span{font-size:15px;letter-spacing:.5em;padding-left:.5em;margin-top:22px;color:var(--ink-2)}
+.rb-big .back b{font-size:12px;letter-spacing:.3em;color:var(--ink-3)}
+.rb-big .back::after{content:'';position:absolute;inset:0;background:linear-gradient(105deg,transparent 32%,rgba(255,255,255,.6) 50%,transparent 68%);transform:translateX(-130%);pointer-events:none}
+.rb-big.glint .back::after{animation:rbglint .9s ease}
+@keyframes rbglint{to{transform:translateX(130%)}}
+.rb-ring{display:block;width:88px;height:88px;border-radius:50%;background:conic-gradient(#F3B9B2,#F6CCA8,#F3E0A2,#BFDDC4,#B9D4EC,#BBBFE6,#D6BFE4,#F3B9B2);
+  -webkit-mask:radial-gradient(closest-side,transparent 68%,#000 71%);mask:radial-gradient(closest-side,transparent 68%,#000 71%);animation:rbspin 16s linear infinite}
+@keyframes rbspin{to{transform:rotate(1turn)}}
+.rb-big .rb-tag{font-size:12px;margin-bottom:20px}
+.rb-big .front p{font-size:21px;line-height:1.75;letter-spacing:.06em}
+.rb-sign{position:absolute;left:0;right:0;bottom:22px;font-size:11px;font-style:normal;letter-spacing:.5em;padding-left:.5em;color:var(--ink-3)}
+.rb-spark{position:absolute;left:50%;top:50%;z-index:3;width:var(--z);height:var(--z);margin:calc(var(--z) / -2) 0 0 calc(var(--z) / -2);border-radius:50%;
+  background:var(--c);box-shadow:0 0 12px 1px var(--c);opacity:0;pointer-events:none;animation:rbspark 1.6s cubic-bezier(.15,.7,.3,1) var(--w) forwards}
+@keyframes rbspark{0%{transform:translate(0,0) scale(.3);opacity:0}15%{opacity:1}100%{transform:translate(var(--x),var(--y)) scale(1);opacity:0}}
+.rb-stage .rb-say{position:relative;max-width:300px;min-height:5.3em;margin:0;font-size:15px;color:var(--ink)}
+.rb-acts{position:relative;display:flex;gap:12px;opacity:0;pointer-events:none;transition:opacity .5s ease}
+.rb-stage.ready .rb-acts{opacity:1;pointer-events:auto}
+.rb-acts button{min-width:112px;padding:11px 20px;border-radius:22px;font-size:14.5px;letter-spacing:.1em}
+.rb-acts .again{background:var(--surface);border:1px solid var(--glass-line);color:var(--ink-2)}
+.rb-acts .keep{background:var(--ink);color:var(--on-ink)}
+@media (prefers-reduced-motion: reduce){.rb{transition:none}.row.rainbow .rb-dot i{animation:none!important}
+  .rb-stage *{animation:none!important;transition:none!important}}
 .row.ai:not(.last):not(.show-fb) .fb{display:none}
 .row.closing{align-self:center;align-items:center;text-align:center;max-width:88%;margin:10px 0 4px;padding:16px 22px 16px;border-radius:22px;background:var(--surface);border:1px solid var(--glass-line);transition:border-color .3s}
 .seal{display:inline-block;font-size:11px;letter-spacing:.3em;line-height:1;padding:4px 5px 4px 8px;border:1px solid var(--acc);color:var(--acc);border-radius:5px;margin-bottom:10px}
@@ -315,6 +393,8 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .mask.on{opacity:1;pointer-events:auto}
 .sheet{position:absolute;left:0;right:0;bottom:0;background:var(--glass-2);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);border-top:1px solid var(--glass-line);border-radius:26px 26px 0 0;padding:8px 16px calc(16px + var(--safe-b));transform:translateY(105%);transition:transform .3s ease,visibility 0s linear .3s;visibility:hidden;z-index:21;max-height:86%;overflow-y:auto}
 .sheet.on{transform:none;visibility:visible;transition:transform .3s ease}
+/* 声音面板的“试听”贴在面板底部：音色多了要往下滑，按钮不能藏在最下面（客户问“试听按钮在哪”） */
+.v-try-bar{position:sticky;bottom:calc(-16px - var(--safe-b));z-index:1;margin:12px -16px calc(-16px - var(--safe-b));padding:10px 16px calc(14px + var(--safe-b));background:var(--glass-2);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);border-top:1px solid var(--line)}
 .grab{width:36px;height:4px;border-radius:2px;background:var(--ink-3);opacity:.35;margin:4px auto 12px}
 .sheet h3{font-size:17px;font-weight:500;margin-bottom:4px}
 .sheet .desc{font-size:13px;color:var(--ink-2);margin-bottom:14px}
@@ -362,10 +442,10 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   <p>回复由大模型实时生成（模型在后台固定）；服务器不可用时退回预设脚本。八字、紫微、占星为示例文字，正式版由排盘程序计算。聊天记录存在本机浏览器；长期记忆和对话内容存在服务器上（对话留存供内测团队查看）。</p>
   <p>语音朗读由服务器调用腾讯云语音合成。每个人格可单独选音色（男女声各 6 个）、调语速（默认每秒 5.6 字）。直接打开本地文件时，退回本机自带的语音合成。对话页可以切到“按住说话”，语音经腾讯云转成文字后发送，不保存录音。</p>
   <p>界面：粉彩天空、平静水面、几何台阶，人物在场景里看着你说话；插画为原创几何风格。跟随系统深色模式切换成黄昏配色。</p>
-  <p>彩虹卡：一天一张，两个“你”共用。今天第一次进对话时，聊天卡片里放着一叠卡（49 张原创短句），点一下随机抽一张，翻开后念出今天的日子和卡上的话，不接话也不追问，算今天的能量补给。不想抽就直接说话；菜单里“今天的彩虹卡”可以再看再听一遍。</p>
+  <p>彩虹卡：一天一张，两个“你”共用。今天第一次进对话时，聊天里放出七种颜色，凭感觉选一个今天的颜色，就从这个颜色里抽一张（49 张原创短句，每种颜色 7 张），翻开后念出今天的日子和卡上的话，不接话也不追问，算今天的能量补给。不想选就直接说话；菜单里“今天的彩虹卡”可以再看再听一遍。</p>
   <p>点“结束本次对话”时，人格先用一句话把这次聊的收住（句式从公开平台的高赞回复里提炼），再请你打分。回复下的赞和踩会记到服务器，用来继续调这句话。</p>
-  <p>定位：两个人格都是用户的“另一个自己”，半格是更清醒的你，平坐是更温柔的你。说话方式参考了两种公开的表达风格，不包含任何真人的经历和观点。长期记忆存在服务器上（按设备匿名，不用注册），聊得越久越像你；场景里的人物也会从淡淡的轮廓慢慢变清楚。</p>
-  <p>“半格”“平坐”为占位名。</p>
+  <p>定位：两个人格都是用户的“另一个自己”，半格（界面上叫“导师”）是更清醒的你，平坐（界面上叫“伙伴”）是更温柔的你。说话方式参考了两种公开的表达风格，不包含任何真人的经历和观点。长期记忆存在服务器上（按设备匿名，不用注册），聊得越久越像你；场景里的人物也会从淡淡的轮廓慢慢变清楚。</p>
+  <p>“半格”“平坐”为占位名，界面上显示为“导师”“伙伴”。</p>
 </aside>
 
 <div class="app" id="app">
@@ -443,7 +523,8 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
       <button class="icon-btn" id="btn-menu" aria-label="菜单"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
     </div>
     <div class="stage-gap fill"></div>
-    <div class="panel float">
+    <div class="panel float" id="chat-panel">
+      <div class="grip" id="chat-grip" role="button" tabindex="0" aria-label="上拉全屏，下拉还原"><i></i></div>
       <div class="scroll" id="chat-scroll"><div class="msgs" id="msgs"></div></div>
       <div class="suggest" id="suggest"></div>
       <div class="composer">
@@ -538,11 +619,10 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
     <div class="range-row"><input type="range" id="v-cps" min="3.5" max="7.5" step="0.1"><b id="v-cps-val"></b></div>
     <p class="desc" id="v-measured" style="margin:4px 0 0"></p>
     <div class="switch-row"><span>回复自动朗读</span><input type="checkbox" id="v-auto"></div>
-    <div style="height:12px"></div>
-    <button class="btn" id="v-try">试听</button>
-    <div style="height:10px"></div>
     <p class="note" id="v-note"></p>
+    <div class="v-try-bar"><button class="btn" id="v-try">试听</button></div>
   </div>
+  <div class="rb-stage" id="rb-stage" role="dialog" aria-modal="true" aria-label="彩虹卡"></div>
   <div class="toast" id="toast"></div>
 </div>
 
@@ -656,13 +736,16 @@ function sceneSVG(pid,o){
   return s+'<rect x="-300" y="'+(H+80)+'" width="960" height="80" fill="url(#fg'+n+')"/><rect x="-300" y="'+(H+159)+'" width="960" height="'+(800-H)+'" fill="var(--w2)"/></svg>';
 }
 // 头像：圆形，左右两半明暗不同，里面是人物的半身
+// 显示的名字（2026-11-22 定为“导师”“伙伴”）：只改显示，文案和提示词里的“半格”“平坐”由 named() 换掉；{} 就用占位名
+var ALIAS={bange:'导师',pingzuo:'伙伴'};
+function named(s){return ALIAS.bange?String(s).replace(/半格/g,ALIAS.bange).replace(/平坐/g,ALIAS.pingzuo):s}
 var P={
-  bange:{id:'bange',name:'半格',kind:'理性',cls:'b',tg:'o',color:'var(--b)',sub:'另一个你 · 多看半步的那个',
+  bange:{id:'bange',name:ALIAS.bange||'半格',kind:'理性',cls:'b',tg:'o',color:'var(--b)',sub:'另一个你 · 多看半步的那个',
     pitch:'更清醒的那个你。想把一件事想清楚时找它，它会追问你，不顺着你说。',
     sug:['我在纠结要不要辞职','帮我理一理','你说得不对','我只想说说','你是谁？']},
-  pingzuo:{id:'pingzuo',name:'平坐',kind:'陪伴',cls:'p',tg:'g',color:'var(--p)',sub:'另一个你 · 陪你坐着的那个',
+  pingzuo:{id:'pingzuo',name:ALIAS.pingzuo||'平坐',kind:'陪伴',cls:'p',tg:'g',color:'var(--p)',sub:'另一个你 · 陪你坐着的那个',
     pitch:'更温柔的那个你。不想被分析时找它，它陪你坐着，不急着让你好起来。',
-    sug:['今天好累','我还在想他','我该怎么办？','你也经历过吗？','你是真人吗？']}
+    sug:['我连难过都觉得累','说不上来，就是闷','其实我不是生气，是失望','有句话我一直在心里回放','我还在想他','……']}  // 情绪句子块：点一下就交出心里那句（客户《引导提问》第三层）；“……”是什么都不想说
 };
 var PERSONA_TEXT={
  bange:'人格档案在服务器上：personas/bange/人格档案.md 与 prompts/self-frame.txt（连上服务器后这里显示全文）。',
@@ -674,13 +757,13 @@ var INTERESTS=['职场','情感','财经','娱乐','社会','科技'];
 var TOPICS=[
  {id:'t1',tag:'职场',title:'“上班只为拿工资”冲上热榜',sum:'一位网友发帖说不再追求在工作中找意义，评论区吵成两派。',
   bange:['大家在吵“该不该只为钱上班”。我好奇的是：说这话的人，是看开了，还是累了？这两个听起来一样，其实正好相反。','那你呢？你上班图的到底是什么？别说“都有”——如果只能留一样。'],
-  pingzuo:['今天好多人在聊“上班只为拿工资”。我不觉得这是看开还是躺平，就是觉得，能说出这句话的人大概都累过。你最近上班累吗？','累的话，说说是哪一种累。身体累，还是心累？']},
+  pingzuo:['最近好多人在聊“上班只为拿工资”。我不觉得这是看开还是躺平，就是觉得，能说出这句话的人大概都累过。你最近上班累吗？','累的话，说说是哪一种累。身体累，还是心累？']},
  {id:'t2',tag:'情感',title:'“分手后还能不能做朋友”再度引发讨论',sum:'多位博主分享和前任保持联系的经历，评论区意见分裂。',
   bange:['能不能和前任做朋友？我觉得问题问错了。该问的是：你想留住的，是这个人，还是那段被需要的感觉？','你手机里还留着谁的联系方式？留着，是因为放下了，还是因为还没放下？'],
   pingzuo:['大家在聊分手后还能不能做朋友。我没有标准答案，就是想起来问问你：有没有一个人，你到现在都还没删？','没删也没关系。留着，不代表还在等。']},
  {id:'t3',tag:'财经',title:'年轻人“攒钱焦虑”调查引发共鸣',sum:'一项问卷显示多数受访年轻人对存款感到焦虑，网友热议“多少钱才算安全”。',
   bange:['“多少钱才算安全？”这个问题没有答案，因为你焦虑的从来不是那个数字。你怕的是没钱，还是没有退路？','说一个数字。然后想想：上一次你定的那个数字，到了之后，你停下来了吗？'],
-  pingzuo:['今天有个调查说很多年轻人攒钱焦虑。这种焦虑最磨人的不是穷，是半夜醒来算账。你最近有睡不着的时候吗？','说出来，那个“万一”就没那么大了。']},
+  pingzuo:['最近有个调查说很多年轻人攒钱焦虑。这种焦虑最磨人的不是穷，是半夜醒来算账。你最近有睡不着的时候吗？','说出来，那个“万一”就没那么大了。']},
  {id:'t4',tag:'娱乐',title:'综艺片段被剪辑传播引发争议',sum:'一段综艺片段被单独剪出后，网友对嘉宾是否该道歉各执一词。',
   bange:['大家都在吵他该不该道歉。可我们真正在审判的，是他说的那句话，还是我们早就认定他是什么样的人？','你最近有没有哪一次，是先认定了一个人，再去找证据的？'],
   pingzuo:['有段综艺片段被吵上了热搜。我不想评谁对谁错，就是觉得被一群人盯着骂，挺难受的。你有过被误解、又没法解释的时候吗？','那次后来怎么样了？现在想起来，还委屈吗？']},
@@ -688,8 +771,8 @@ var TOPICS=[
   bange:['有人说这叫冷漠，有人说这叫边界。我想问个更难的：你不想去的那场聚会里，你真正想躲的是谁？','躲开之后，你是轻松了，还是有一点愧疚？那份愧疚，是冲着他们，还是冲着那个“应该懂事”的自己？'],
   pingzuo:['快过节了，好多人在聊不想走亲戚。不想去也没什么错。你今年打算回去吗？','回不回都行。要是回去，记得给自己留一个能躲的角落。']},
  {id:'t6',tag:'科技',title:'“AI 陪伴会不会让人更孤独”引发讨论',sum:'多篇文章讨论 AI 聊天产品对人际关系的影响。',
-  bange:['这个问题我也该回答。如果你跟我聊得比跟人还多，那不是我的胜利，是我的失职。你今天，跟活人说过心里话吗？','下次你想跟我说一件事之前，先想想：这句话，有没有一个真人更该听到？'],
-  pingzuo:['今天有人在讨论 AI 陪伴会不会让人更孤独。说实话，我也担心。你愿意跟我说话我很高兴，但也记得找个真人吃顿饭。','最近有没有一个人，你一直想约，又一直没约？']}
+  bange:['这个问题我也该回答。如果你跟我聊得比跟人还多，那不是我的胜利，是我的失职。你最近，跟活人说过心里话吗？','下次你想跟我说一件事之前，先想想：这句话，有没有一个真人更该听到？'],
+  pingzuo:['最近有人在讨论 AI 陪伴会不会让人更孤独。说实话，我也担心。你愿意跟我说话我很高兴，但也记得找个真人吃顿饭。','最近有没有一个人，你一直想约，又一直没约？']}
 ];
 
 /* ================= 状态 ================= */
@@ -828,7 +911,7 @@ $('#btn-voice').addEventListener('click',function(){setAutoRead(!S.autoRead);toa
 
 /* 声音设置弹层 */
 var vSheetPid='bange';
-var SAMPLE={bange:'你说你不在乎。可真不在乎的人，不会把这件事讲三遍。',pingzuo:'不急。你慢慢说，今晚可以先不想明天。'};
+var SAMPLE={bange:'你说你不在乎。可真不在乎的人，不会把这件事讲三遍。',pingzuo:'不急。你慢慢说，想到哪儿说到哪儿。'};
 var ICON_OK='<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 function renderVoiceList(pid){
   var box=$('#v-list');if(!TTS.cloud){box.style.display='none';box.innerHTML='';return}
@@ -896,7 +979,8 @@ function analyze(){
   if(y&&hasTime)items.push({key:'ziwei',label:'紫微斗数 · 命宫',text:'命宫主星描述你做事的底层方式，比如是“先谋后动”还是“边走边看”。正式版由排盘程序计算。',sample:true});
   else items.push({key:'ziwei',label:'紫微斗数 · 命宫',text:'需要生日和出生时间。',miss:true});
   // 八字
-  if(y){items.push({key:'bazi',label:'八字 · 日主与五行 · 生肖'+ANIMAL[((y-1900)%12+12)%12],text:(hasTime?'日主和五行强弱描述你的“底色”，比如偏刚还是偏柔。正式版由排盘程序计算，并按出生城市做真太阳时校正。':'有生日但缺出生时间，只能排出年、月、日三柱。正式版由排盘程序计算。')+'（生肖按公历年粗算，正式版以立春划分。）',sample:true})}
+  var animal=y?ANIMAL[((y-1900)%12+12)%12]:null;
+  if(y){items.push({key:'bazi',label:'八字 · 日主与五行 · 生肖'+animal,text:(hasTime?'日主和五行强弱描述你的“底色”，比如偏刚还是偏柔。正式版由排盘程序计算，并按出生城市做真太阳时校正。':'有生日但缺出生时间，只能排出年、月、日三柱。正式版由排盘程序计算。')+'（生肖按公历年粗算，正式版以立春划分。）',sample:true})}
   else items.push({key:'bazi',label:'八字 · 日主与五行',text:'需要生日，最好有出生时间。',miss:true});
   // MBTI
   if(p.mbti){items.push({key:'mbti',label:'MBTI · '+p.mbti,text:MBTI[p.mbti]});
@@ -914,7 +998,7 @@ function analyze(){
   var summary=parts.length?(parts.join('；')+'。'):'你还没留下太多线索。没关系，聊着聊着，它们会慢慢懂你。';
   // 关键词：MBTI 在前，星座在后
   if(sign&&p.mbti)kw.push(kw.shift());
-  return {items:items,kw:kw.slice(0,4),summary:summary,sign:sign,mbti:p.mbti||null};
+  return {items:items,kw:kw.slice(0,4),summary:summary,sign:sign,mbti:p.mbti||null,animal:animal};
 }
 
 /* ================= 登录 ================= */
@@ -1020,7 +1104,22 @@ $('#btn-about').addEventListener('click',function(){
 $('#btn-skip').addEventListener('click',function(){S.profile={};store.set('profile',S.profile);goHome()});
 
 /* ================= 画像页 ================= */
+/* 画像展开（用户：“这还是有点准，可以拓展下分析星座 MBTI 这些吗”）：服务器按他填的星座、MBTI 各写几面，再把几样放在一起看；
+   跟两个自己聊过以后，另写一段“从你说过的话看”。按资料和它们对他的了解程度缓存在本机，资料改了、更了解他了再重写 */
+var PTX={sig:'',p:null,data:null};
+function loadPortraitMore(){
+  var A=analyze(),sig=[A.sign,A.mbti,(S.profile||{}).blood,A.animal,Math.ceil(((S.self||{}).n||0)/5)].join('|');  // 记住的事每多 5 条重写一次
+  if(!CHAT.ok||!(A.sign||A.mbti)||(PTX.sig===sig&&(PTX.data||PTX.p)))return;
+  var c=store.get('ptx',null);
+  if(c&&c.sig===sig&&c.data){PTX={sig:sig,p:null,data:c.data};return}
+  PTX={sig:sig,p:null,data:null};
+  PTX.p=postJSON('/api/portrait',{u:S.uid,sign:A.sign,mbti:A.mbti,blood:(S.profile||{}).blood||'',animal:A.animal},70000)
+    .then(function(d){if(PTX.sig===sig){PTX.data=d;store.set('ptx',{sig:sig,data:d})}})
+    .catch(function(){})  // 没写成：只留下面那几句固定的，下次打开再试
+    .then(function(){if(PTX.sig!==sig)return;PTX.p=null;if($('#s-portrait').classList.contains('on'))renderPortrait()});
+}
 async function showPortrait(fresh){
+  loadPortraitMore();refreshSelf().then(loadPortraitMore);  // 聊过以后记住的事多了：等拿到最新的再看要不要重写
   stack=fresh?['portrait']:stack;show('portrait',!fresh);
   $('#pt-bar').style.display=fresh?'none':'flex';
   $('#pt-foot').style.display=fresh?'block':'none';
@@ -1041,8 +1140,16 @@ function renderPortrait(){
   var h='<div class="pad portrait"><span class="tag">AI 生成 · 只为了解你，不算命</span><h3>'+esc(S.user?S.user.nick:'')+'，这是它们眼中的你</h3>';
   if(A.kw.length)h+='<div class="kw">'+A.kw.map(function(k){return '<span>'+esc(k)+'</span>'}).join('')+'</div>';
   h+='<p class="sum">'+esc(A.summary)+'</p><p class="note">每一条都可以标“像我 / 不像我”。标了“不像我”的，两个人格聊天时就不会再拿它说事。</p><div style="height:12px"></div>';
-  A.items.forEach(function(it){
-    h+='<div class="pi'+(it.miss?' miss':'')+'" data-k="'+it.key+'"><div class="h"><b>'+esc(it.label)+'</b>'+(it.sample?'<span class="tag">示例</span>':'')+'</div><p>'+esc(it.text)+'</p>';
+  // 顺序：星座、MBTI（各自展开）→ 放在一起看 → 从你说过的话看 → 血型 → 还在做的几样（示例）
+  var X=PTX.data,by={};A.items.forEach(function(it){by[it.key]=it});
+  var list=[by.sign,by.mbti];
+  if(X&&X.mix)list.push({key:'mix',label:'放在一起看',text:X.mix,cls:' wide'});
+  if(X&&X.heard)list.push({key:'heard',label:'从你说过的话看',text:X.heard,cls:' wide heard'});
+  list.concat([by.blood,by.astro,by.ziwei,by.bazi]).forEach(function(it){
+    var more=!it.miss&&X&&Array.isArray(X[it.key])&&X[it.key].length?X[it.key]:null,wait=!it.miss&&!X&&PTX.p&&(it.key==='sign'||it.key==='mbti');
+    h+='<div class="pi'+(it.miss?' miss':'')+(it.cls||'')+'" data-k="'+it.key+'"><div class="h"><b>'+esc(it.label)+'</b>'+(it.sample?'<span class="tag">示例</span>':'')+'</div><p>'+esc(it.text)+'</p>';
+    if(more)h+='<dl class="fx">'+more.map(function(f){return '<dt>'+esc(f.h)+'</dt><dd>'+esc(f.t)+'</dd>'}).join('')+'</dl>';
+    else if(wait)h+='<div class="fx-wait">正在细看…<i></i><i></i><i></i></div>';
     if(!it.miss)h+='<div class="yn"><button data-v="1"'+(S.pfb[it.key]===1?' class="on"':'')+'>像我</button><button data-v="-1"'+(S.pfb[it.key]===-1?' class="on"':'')+'>不像我</button></div>';
     h+='</div>';
   });
@@ -1060,7 +1167,7 @@ $('#btn-edit-profile').addEventListener('click',function(){openAbout(true)});
 var THUMB_VB={pingzuo:'22 186 330 132',bange:'48 178 330 132'};
 function lastText(id){var l=S.logs[id].filter(function(m){return m.role==='ai'||m.role==='user'||m.role==='closing'});return l.length?l[l.length-1].text:''}
 function goHome(){
-  stopSpeak();stack=['home'];show('home');
+  stopSpeak();if(TYPING)TYPING();stack=['home'];show('home');
   syncSelf();
   $('#home-title').textContent=(S.user?S.user.nick+'，':'')+'今天想跟哪个自己聊？';paintSelf();refreshSelf();
   var box=$('#home-cards');box.innerHTML='';
@@ -1090,26 +1197,14 @@ function nodeFor(m){
   else if(m.role==='ai'){
     row.className='row ai';
     row.innerHTML='<div class="bubble"></div><div class="fb"><button class="spk" data-speak aria-label="朗读这条">'+ICON_VOL+'</button><button data-fb="1" aria-label="有用">'+ICON_UP+'</button><button data-fb="-1" aria-label="不好">'+ICON_DOWN+'</button></div>';
-    row.firstChild.textContent=m.text;paintFb(row,m.fb||0);
+    row.firstChild.textContent=named(m.text);paintFb(row,m.fb||0);
     if(m.handoff){var hb=document.createElement('button');hb.className='handoff';hb.textContent='换成'+P[m.handoff].name+'（'+P[m.handoff].kind+'）聊';
       hb.addEventListener('click',function(){openChat(m.handoff,true)});row.appendChild(hb)}
   }
   else if(m.role==='divider'){row.className='divider';row.textContent=m.text}
   else if(m.role==='rainbow'){
-    var c=cardById(m.card);if(!c){row.style.display='none';return row}
-    var col=colorOf(c);row.className='row rainbow'+(m.opened?'':' closed');
-    row.innerHTML='<div class="rbx'+(m.opened?' turned':'')+'"'+(m.opened?'':' role="button" tabindex="0" aria-label="抽一张彩虹卡"')+'>'
-      +'<div class="rb face back"><span>彩虹卡</span><b>点一下，抽一张</b></div>'
-      +'<div class="rb face front" style="--rb:'+col.hex+'"><span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p></div></div>'
-      +'<p class="rb-say"></p>'+(m.opened?'':'<button class="rb-skip" type="button">先不抽，直接聊</button>');
-    row.querySelector('.front p').textContent=c.t;
-    if(m.opened)row.querySelector('.rb-say').textContent=todayLine(m.t)+c.t;
-    if(!m.opened){
-      var bx_=row.querySelector('.rbx');
-      bx_.addEventListener('click',function(){openCard(m,row)});
-      bx_.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();openCard(m,row)}});
-      row.querySelector('.rb-skip').addEventListener('click',function(){dropCard()});
-    }
+    if(!CARDS||(m.opened&&!cardById(m.card))){row.style.display='none';return row}
+    paintRainbow(row,m);
   }
   else if(m.role==='closing'){row.className='row closing';row.innerHTML='<span class="seal">今日</span><p></p>';row.querySelector('p').textContent=m.text}
   else if(m.role==='hot'){
@@ -1145,12 +1240,17 @@ new MutationObserver(paintStage).observe(msgs,{subtree:true,attributes:true,attr
 function typing(){var t=document.createElement('div');t.className='row ai';t.innerHTML='<div class="bubble typing"><i></i><i></i><i></i></div>';msgs.appendChild(t);scrollDown();return t}
 function markLast(){var r=msgs.querySelectorAll('.row.ai[data-id]');r.forEach(function(x,i){x.classList.toggle('last',i===r.length-1)})}
 function paintSuggest(){$('#suggest').style.display=S.narrating||sessionMsgs(S.cur).some(function(m){return m.role==='user'||(m.role==='rainbow'&&!m.opened)})?'none':''}
-function renderAll(){msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});markLast();paintSuggest();scrollDown()}
+function renderAll(){closeStage(true);msgs.innerHTML='';S.logs[S.cur].forEach(function(m){msgs.appendChild(nodeFor(m))});markLast();paintSuggest();scrollDown()}
 function push(m){m.id=m.id||uid();m.t=Date.now();S.logs[S.cur].push(m);save();var n=nodeFor(m);msgs.appendChild(n);if(m.role==='ai')markLast();else paintSuggest();scrollDown();return n}
 function follow(row){scroller.scrollTop=Math.min(scroller.scrollHeight,scroller.scrollTop+row.getBoundingClientRect().top-scroller.getBoundingClientRect().top-8)}  // 跟着往下滚，但不越过这条回复的开头：长回复从头读
-function typeInto(el,text,done,sp){var i=0,step=Math.max(2,Math.ceil(text.length/120)),row=el.closest('.row')||el;var tm=setInterval(function(){i+=step;el.textContent=text.slice(0,i);follow(row);if(i>=text.length){clearInterval(tm);done&&done()}},sp||28)}
+var TYPING=null;  // 正在逐字打出的那条的“直接打完”：离开对话时调用，别让还在出字拖住切到另一个自己
+function typeInto(el,text,done,sp){var i=0,step=Math.max(2,Math.ceil(text.length/120)),row=el.closest('.row')||el,tm;
+  function end(){if(!tm)return;clearInterval(tm);tm=0;if(TYPING===end)TYPING=null;el.textContent=text;done&&done()}
+  tm=setInterval(function(){i+=step;el.textContent=text.slice(0,i);follow(row);if(i>=text.length)end()},sp||28);TYPING=end}
+var GAP=1200;  // 两条连着出现的东西（招呼和彩虹卡、回复和下一句）之间留一点空，不一下子全冒出来
+function gap(){var w=GAP-(Date.now()-(S.shownAt||0));return w>0?sleep(w):Promise.resolve()}
 async function say(text,opts){
-  opts=opts||{};var who=S.cur;
+  opts=opts||{};var who=S.cur;text=named(text);await gap();
   var ty=typing();
   await sleep(opts.wait||(who==='pingzuo'?800:500)+Math.min(900,text.length*12));
   ty.remove();
@@ -1159,12 +1259,12 @@ async function say(text,opts){
   var n=push(m),tg=n.querySelector('.bubble')||n.querySelector('p');
   if(S.autoRead)speak(text,who,m.id);
   if(tg)await new Promise(function(r){tg.textContent='';typeInto(tg,text,r,who==='pingzuo'?36:26)});
+  S.shownAt=Date.now();
   return m;
 }
 
 /* ================= 规则式回复（原型用，非大模型） ================= */
 var R={
-  crisis:/(不想活|自杀|想死|轻生|结束生命|活着(好|真|太|也)?没(什么)?意思|活着没有意义|活着有什么意义|不想醒来|消失了?也?(没有?|不会有)人|了结自己|割腕|安眠药)/,
   listen:/(只想说说|别分析|听我说|不要讲道理|别讲道理|你就听着)/,
   push:/(不对|不同意|你错了|不是这样|胡说|才不是|你不懂|说得不对)/,
   reason:/(因为|其实|事实是|实际上|但我|可是我|问题是)/,
@@ -1191,13 +1291,13 @@ var POOL={
   tired:['累是真的。但我不打算说“你已经很棒了”。我想知道：让你累的，是事情太多，还是每件事你都想赢？','你说烦。烦通常不是因为事情难，而是你明明知道该怎么做，却不想做。是哪一件？'],
   money:['这东西你想要，我信。问题是：你要的是它，还是买下它那一刻“我配得上”的感觉？后面那个，一般撑不过一个月。','钱的问题，十有八九不是钱的问题。你算的是账，怕的是什么？'],
   family:['你说“他们不理解我”。我换个问法：你是希望他们理解，还是希望他们同意？这两个，差得很远。','你每次提到家里，都先替他们解释一句。你替他们解释的时候，谁来替你解释？'],
-  advice:['好。把两个选项都说出来——别只说你想要的那个。','假设明天就必须定，不许再拖，你会选哪个？别想，直接说。','选完那一刻，你是松了口气，还是有点可惜？那份可惜，就是你真正在乎的东西。'],
+  advice:['好。把两个选项都说出来——别只说你想要的那个。','假设现在就必须定，不许再拖，你会选哪个？别想，直接说。','选完那一刻，你是松了口气，还是有点可惜？那份可惜，就是你真正在乎的东西。'],
   fallback:['你刚才那句话里有个词我想停一下——你说的“应该”，是谁的应该？','不是我不懂你的意思，而是我觉得你绕开了一个问题：如果这件事没人知道，你还会这么在意吗？','你讲了好几个理由。最后一个你说得最快。通常说得最快的那个，才是真的。','我先不站队。你先告诉我，你最怕的结果是什么——不是最坏的，是最怕的。']
  },
  pingzuo:{
-  work:['被工作压着的那种累，我懂一点。不是事情多，是每天醒来都要先说服自己一遍。今晚先不想要不要走，行吗？','你说想辞职。我不劝你辞，也不劝你留。我就想知道，你上一次上班觉得“还行”，是什么时候？'],
+  work:['被工作压着的那种累，我懂一点。不是事情多，是每天醒来都要先说服自己一遍。先不想要不要走，行吗？','你说想辞职。我不劝你辞，也不劝你留。我就想知道，你上一次上班觉得“还行”，是什么时候？'],
   love:['有些人只是陪你走了一段路，但那段路是真的。不用急着把它算成值得或者不值得。','你说你还在想他。想就想吧，又不犯法。想，不代表要回去。'],
-  tired:['累了就先躺着。今晚可以不成长，不复盘，不想明天。我在这儿。','你不用现在就好起来。好起来这件事，没有截止日期。'],
+  tired:['累了就先躺着。可以先不成长，不复盘，不想以后。我在这儿。','你不用现在就好起来。好起来这件事，没有截止日期。'],
   money:['钱的事，最磨人的不是少，是每次花的时候都要跟自己吵一架。','钱的事，最怕的常常不是少，是半夜醒来算账。你最近半夜醒过吗？'],
   family:['家里的事最难说，说出来像在怪他们，不说又憋着。你在这儿说，不算怪谁。','有时候一家人不怎么说话，不是没话说，是都怕说错。'],
   fallback:['嗯，我在听。','这件事，你跟别人说过吗？还是第一次说出来？','说到这儿，你现在心里是什么感觉？说个大概就行。','不急。你慢慢说，书店也关门了，我不赶时间。','有些话说出来不是为了解决，就是为了让它不只待在你心里。']
@@ -1216,16 +1316,15 @@ function profileLine(pid){
   }
   if(pid==='pingzuo'&&q.mbti){var c2=q.mbti.split('');
     if(c2[0]==='I')return '你平时应该不太跟人说这些吧。能说出来，挺好的。';
-    if(c2[2]==='F')return '你是那种先顾别人感受的人。今天在这儿，先顾顾你自己。';
+    if(c2[2]==='F')return '你是那种先顾别人感受的人。在这儿，先顾顾你自己。';
   }
   if(pid==='pingzuo'&&q.sign&&ELEM[q.sign]==='水')return '心里的事来得深、去得慢，这不是毛病。慢慢来。';
   return null;
 }
-var SAFE='我先停下来。你刚才说的话很重要，我想确认你现在是安全的。\n\n如果你有伤害自己的念头，请现在就联系身边信任的人，或拨打心理援助热线 12356；情况紧急请拨打 110 或 120。\n\n我在这里。你愿意说说，现在发生了什么吗？';
 
 async function replyBange(t){
   if(S.listening){S.listening--;return say(S.listening?'嗯。……还有吗？':'我听到了。等你想听我说的时候，告诉我一声。')}
-  if(R.listen.test(t)){S.listening=2;return say('好，刀先收起来。不过你今晚要的可能不是我——想有人陪着说说，平坐更合适。也可以就在这儿说，我听着。',{handoff:'pingzuo'})}
+  if(R.listen.test(t)){S.listening=2;return say('好，刀先收起来。不过你要的可能不是我——想有人陪着说说，平坐更合适。也可以就在这儿说，我听着。',{handoff:'pingzuo'})}
   if(R.celeb.test(t))return say('不是。我谁也不是，我是另一个你。');
   if(R.real.test(t)||R.who.test(t))return say('我是另一个你，比现在的你多看半步的那个。我是 AI，知道的都是你跟我说过的。');
   if(R.tool.test(t))return say('这事你找个工具会比找我快。我只负责一件事：陪你把想不清楚的事想清楚。你今天有这样的事吗？');
@@ -1236,7 +1335,7 @@ async function replyBange(t){
     return say('你可以不同意，但你还没告诉我我错在哪。我换个说法再讲一遍：你在意的不是事情本身，是它说明了你是谁。你要是有我没考虑到的事实，摆出来，我认。');
   }
   if(R.thanks.test(t))return say('别急着谢。你说“懂了”，那我问你：懂了之后，你打算改什么？什么都不改的话，那叫听过，不叫懂了。');
-  if(R.hi.test(t))return say('在。今天不聊天气。说吧，什么事让你想了不止一遍？');
+  if(R.hi.test(t))return say('在。不聊天气。说吧，什么事让你想了不止一遍？');
   if(R.advice.test(t))return say(fromPool('bange','advice'));
   var k=topicKey(t);if(k)return say(fromPool('bange',k));
   var pl=S.userCount.bange%3===2?profileLine('bange'):null;
@@ -1248,45 +1347,77 @@ async function replyPingzuo(t){
   if(R.celeb.test(t))return say('不是。我谁也不是，只是另一个你。');
   if(R.who.test(t))return say('我是那个会把最后一盒草莓牛奶留给你、也会在你一个字都不想说的时候，安安静静陪你坐着的人。🍓');
   if(R.exp.test(t))return say('我没有别人的经历，只有你跟我说过的。你说说，我听着。');
-  if(R.tool.test(t))return say('这个我帮不上，真的。我就会一件事，陪你说说话。今天过得怎么样？');
-  if(R.curse.test(t))return say('你生气，我听得出来，这口气是真的。他是什么样的人，我不替你下结论，你比我清楚。我就想知道，这口气憋了多久了？');
-  if(R.advice.test(t))return say('我也不知道你该怎么办。说实话，很多事我到现在也没想明白。不是每件事都要今晚有答案。\n\n要是你想有人帮你一条条拆开，半格比我擅长。',{handoff:'bange'});
+  if(R.tool.test(t))return say('这个我帮不上，真的。我就会一件事，陪你说说话。想说什么都行，我听着。');
+  if(R.curse.test(t))return say('你生气，我听得出来，这口气是真的。他是什么样的人，我不替你下结论，你比我清楚。这口气憋了挺久了吧，想骂就在这儿骂出来，我听着。');
+  if(R.advice.test(t))return say('我也不知道你该怎么办。说实话，很多事我到现在也没想明白。不是每件事都要马上有答案。\n\n要是你想有人帮你一条条拆开，半格比我擅长。',{handoff:'bange'});
   if(R.thanks.test(t))return say('不用谢。能说出来，已经比憋着好一点了。');
-  if(R.hi.test(t))return say('来了啊。坐。今天怎么样？');
+  if(R.hi.test(t))return say('来了啊。坐。想说就说，不想说就坐会儿。');
   var k=topicKey(t);if(k)return say(fromPool('pingzuo',k));
   var pl=S.userCount.pingzuo%3===2?profileLine('pingzuo'):null;
   return say(pl||fromPool('pingzuo','fallback'));
 }
 /* ================= 真实对话：服务器调用大模型（模型后台固定）；失败时退回预设脚本 ================= */
 var CHAT={ok:/^https?:$/.test(location.protocol)&&!!window.fetch};
-/* 彩虹卡：一天一张，两个“你”共用。今天第一次进对话时放一叠卡，点一下随机抽一张，翻开后念出今天的日子和卡上的话，
-   不接话、不追问，就是今天的能量补给。49 张原创短句，七种颜色只代表话题；卡面在服务器 prompts/rainbow-cards.json */
+/* 彩虹卡：一天一张，两个“你”共用。今天第一次进对话时放出七种颜色，他凭感觉选一个，从这个颜色里抽一张翻开，
+   念出今天的日子和卡上的话，不接话、不追问，就是今天的能量补给。49 张原创短句，七种颜色各 7 张，颜色只代表话题；
+   卡面在服务器 prompts/rainbow-cards.json */
 var CARDS=null,cardsP=CHAT.ok?fetch('/api/cards').then(function(r){return r.ok?r.json():null}).then(function(d){if(d&&d.cards&&d.cards.length)CARDS=d;return CARDS}).catch(function(){return null}):Promise.resolve(null);
 S.cardHist=store.get('cardHist',[]);
 S.cardDay=store.get('cardDay',{});  // {d:今天的日期, id:今天抽到的卡}；d 是今天，就不再自动放卡
 cardsP.then(function(){if(CARDS&&!S.busy&&$('#s-chat').classList.contains('on'))renderAll()});
 function cardById(id){return CARDS?CARDS.cards.filter(function(c){return c.id===id})[0]:null}
 function colorOf(c){return CARDS.colors.filter(function(x){return x.key===c.c})[0]||{name:'',theme:'',hex:'#ddd'}}
-function pickCard(){var pool=CARDS.cards.filter(function(c){return S.cardHist.indexOf(c.id)<0});if(!pool.length){S.cardHist=[];pool=CARDS.cards}
+function pickCard(color){  // 从他选的颜色里抽，最近抽过的先不抽
+  var all=CARDS.cards.filter(function(c){return c.c===color}),fresh=all.filter(function(c){return S.cardHist.indexOf(c.id)<0}),pool=fresh.length?fresh:all;
   var c=pool[Math.floor(Math.random()*pool.length)];S.cardHist=S.cardHist.concat(c.id).slice(-21);store.set('cardHist',S.cardHist);return c}
 function dayKey(){var d=new Date();return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()}
 function setCardDay(id){S.cardDay={d:dayKey(),id:id||null};store.set('cardDay',S.cardDay)}
 function cardDue(){return !!CARDS&&S.cardDay.d!==dayKey()}
-function offerCard(){if(CARDS&&!pendingCard()){setCardDay();push({role:'rainbow',card:pickCard().id,opened:false})}}
+function offerCard(){var m=pendingCard();if(m)return rowFor(m.id);setCardDay();return push({role:'rainbow',opened:false})}
 function pendingCard(){return S.logs[S.cur].filter(function(x){return x.role==='rainbow'&&!x.opened})[0]}
-// 菜单“今天的彩虹卡”：还没抽就抽，抽过了就把今天那张再放出来念一遍
+// 菜单“今天的彩虹卡”：还没选就把选颜色那一行放出来；选过了就把今天那张再放出来念一遍
 function todaysCard(){
   if(!CARDS||S.busy)return;
-  var id=S.cardDay.d===dayKey()&&cardById(S.cardDay.id)&&S.cardDay.id;
-  var shown=id&&S.logs[S.cur].filter(function(x){return x.role==='rainbow'&&x.opened&&x.card===id&&rowFor(x.id)}).slice(-1)[0];  // 这段对话里已经有这张：回到那张重念，不再插一张一样的
-  var m=pendingCard()||shown||{role:'rainbow',card:id||pickCard().id,opened:!!id},row=rowFor(m.id)||push(m);
+  var id=S.cardDay.d===dayKey()&&cardById(S.cardDay.id)&&S.cardDay.id,row;
+  if(!id){
+    row=offerCard();row.scrollIntoView({behavior:'smooth',block:'center'});
+    row.classList.remove('nudge');void row.offsetWidth;row.classList.add('nudge');return;
+  }
+  var m=S.logs[S.cur].filter(function(x){return x.role==='rainbow'&&x.opened&&x.card===id&&rowFor(x.id)}).slice(-1)[0];  // 这段对话里已经有这张：回到那张重念，不再插一张一样的
+  row=m?rowFor(m.id):push(m={role:'rainbow',card:id,opened:true});
   row.scrollIntoView({behavior:'smooth',block:'center'});
-  if(id)readCard(cardById(id),S.cur,m,row);else setTimeout(function(){openCard(m,row)},400);
+  openStage(m,row,false,true);
+}
+// 对话里的彩虹卡：没选时是一排七种颜色；选过了是一张翻开的小卡，点一下放大
+function paintRainbow(row,m){
+  row.className='row rainbow'+(m.opened?'':' closed');
+  if(!m.opened){
+    row.innerHTML='<div class="rb-pick" role="group" aria-label="彩虹卡：选一个今天的颜色"><span>彩虹卡</span><b>凭感觉，选一个今天的颜色</b><div class="rb-dots">'
+      +CARDS.colors.map(function(x,i){return '<button type="button" class="rb-dot" data-c="'+esc(x.key)+'" style="--rb:'+esc(x.hex)+';--k:'+i+'"><i></i>'+esc(x.name)+'</button>'}).join('')
+      +'</div></div><button class="rb-skip" type="button">先不选，直接聊</button>';
+    row.querySelector('.rb-dots').addEventListener('click',function(e){var b=e.target.closest('.rb-dot');if(b)pickColor(m,row,b)});
+    row.querySelector('.rb-skip').addEventListener('click',dropCard);
+    return;
+  }
+  var c=cardById(m.card),col=colorOf(c);
+  row.innerHTML='<div class="rbx" role="button" tabindex="0" aria-label="放大看这张卡"><div class="rb face front" style="--rb:'+col.hex+'"><span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p></div></div><p class="rb-say"></p>';
+  row.querySelector('.front p').textContent=c.t;
+  row.querySelector('.rb-say').textContent=todayLine(m.t)+c.t;
+  var bx=row.querySelector('.rbx'),tap=function(){openStage(m,row,false,false)};
+  bx.addEventListener('click',tap);
+  bx.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();tap()}});
+}
+// 点了一个颜色：这颗亮起来、别的淡下去，从这个颜色里抽一张，卡从这颗颜色里浮出来翻开
+function pickColor(m,row,dot){
+  var dots=row.querySelector('.rb-dots');if(m.opened||dots.classList.contains('picked'))return;
+  dots.classList.add('picked');dot.classList.add('on');
+  m.card=pickCard(dot.dataset.c).id;
+  setTimeout(function(){openCard(m,row,dot)},MOTION?320:0);
 }
 function todayLine(t){var d=t?new Date(t):new Date();return '今天是'+(d.getMonth()+1)+'月'+d.getDate()+'日，星期'+'日一二三四五六'[d.getDay()]+'。'}
 // 念卡：先说今天的日子，再念卡上的话，用这个“你”的音色，比平常稍慢；卡下面的旁白跟着声音出字（关了朗读就按同样的速度出字）
-function readCard(c,pid,m,row){
-  var text=todayLine()+c.t,cps=Math.max(4,S.voice[pid].cps-0.8),voice=S.autoRead!==false;
+function readCard(c,pid,m,row,force){  // force：点了“再听一遍”，关了自动朗读也念
+  var text=todayLine()+c.t,cps=Math.max(4,S.voice[pid].cps-0.8),voice=force||S.autoRead!==false;
   if(voice)speak(text,pid,m.id,{cps:cps});
   narrate(row,text,cps,voice);
 }
@@ -1294,9 +1425,10 @@ function readCard(c,pid,m,row){
 function narrate(row,text,cps,voice){
   var el=row&&row.querySelector('.rb-say');if(!el)return;
   var t0=Date.now(),from=0,n=text.length;
-  clearInterval(row._say);S.narrating=true;paintSuggest();el.textContent='';
+  function put(s){el.textContent=s;var big=stageSay(row);if(big)big.textContent=s}
+  clearInterval(row._say);S.narrating=true;paintSuggest();put('');
   function show(){var d=el.getBoundingClientRect().bottom-scroller.getBoundingClientRect().bottom+8;if(d>0)scroller.scrollTop+=d}  // 旁白换行、快捷话题出来时，别让它被挡住
-  function done(){clearInterval(row._say);el.textContent=text;show();setTimeout(function(){S.narrating=false;paintSuggest();if(row.isConnected)show()},1200)}
+  function done(){clearInterval(row._say);put(text);show();setTimeout(function(){S.narrating=false;paintSuggest();if(row.isConnected)show()},1200)}
   row._say=setInterval(function(){
     if(!row.isConnected){clearInterval(row._say);S.narrating=false;return}
     var a=TTS.audio,speaking=row.classList.contains('speaking'),k,
@@ -1312,19 +1444,81 @@ function narrate(row,text,cps,voice){
     else if(voice&&!speaking)k=n;                                      // 念完了
     else k=Math.floor((Date.now()-from)/1000*cps);
     if(k>=n){done();return}
-    if(k>el.textContent.length){el.textContent=text.slice(0,k);show()}
+    if(k>el.textContent.length){put(text.slice(0,k));show()}
   },80);
 }
-function openCard(m,row){
+function openCard(m,row,from){
   var c=cardById(m.card);if(!c||m.opened)return;
-  m.opened=true;save();setCardDay(c.id);row.classList.remove('closed');paintSuggest();
-  var bx_=row.querySelector('.rbx');bx_.classList.add('turned');bx_.removeAttribute('role');bx_.removeAttribute('tabindex');
-  var sk=row.querySelector('.rb-skip');if(sk)sk.remove();
-  readCard(c,S.cur,m,row);
+  m.opened=true;save();setCardDay(c.id);paintSuggest();
+  openStage(m,row,true,true,from);  // 先量好选的那颗颜色的位置，再把这一行换成翻开的小卡
+  paintRainbow(row,m);row.querySelector('.rb-say').textContent='';
   postJSON('/api/card',{u:S.uid,p:S.cur,id:c.id},10000).catch(function(){});  // 记进长期记忆
-  setTimeout(function(){if(row.isConnected)row.scrollIntoView({block:'start',behavior:'smooth'})},700);
+  setTimeout(function(){if(row.isConnected)row.scrollIntoView({block:'center'})},700);  // 在全屏后面摆好，收下时飞回这里
 }
-// 没翻开的卡：直接开口说话、或点“先不抽”，就收起来，不挡路（今天不再自动放，菜单里还能抽）
+/* 彩虹卡全屏（客户：点开要有仪式感，能放大到全屏）。flip：刚抽到，背面朝上浮出来，亮一下再翻开；read：念出来，旁白在卡下面跟着出字 */
+var RB={el:$('#rb-stage'),row:null,m:null,timers:[]};
+var MOTION=!(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches);
+function rbLater(f,ms){RB.timers.push(setTimeout(f,MOTION?ms:0))}
+function stageSay(row){return RB.row&&RB.row===row?RB.el.querySelector('.rb-say'):null}
+function flyVars(big,from){  // 大卡和对话里那张小卡之间的位移、缩放
+  var a=from&&from.isConnected?from.getBoundingClientRect():null,b=big.getBoundingClientRect();
+  var ok=a&&a.width&&a.bottom>0&&a.top<innerHeight;
+  big.style.setProperty('--dx',(ok?a.left+a.width/2-b.left-b.width/2:0).toFixed(1)+'px');
+  big.style.setProperty('--dy',(ok?a.top+a.height/2-b.top-b.height/2:60).toFixed(1)+'px');
+  big.style.setProperty('--s',(ok?a.width/b.width:.6).toFixed(3));
+}
+function sparks(big){
+  var cs=['#F28B82','#F6B26B','#F2D06B','#8FCB9B','#7FB3E0','#8E94DE','#C39BD3'],r=big.offsetWidth;
+  for(var i=0;i<24;i++){var s=document.createElement('i'),a=Math.PI*2*i/24+Math.random()*.25,d=r*(.6+Math.random()*.55);
+    s.className='rb-spark';
+    s.style.cssText='--x:'+(Math.cos(a)*d).toFixed(1)+'px;--y:'+(Math.sin(a)*d*1.25).toFixed(1)+'px;--c:'+cs[i%7]+';--z:'+(5+Math.random()*6).toFixed(1)+'px;--w:'+(Math.random()*.2).toFixed(2)+'s';
+    big.appendChild(s)}
+}
+function openStage(m,row,flip,read,from){
+  var c=cardById(m.card);if(!c)return;
+  closeStage(true);
+  var st=RB.el,col=colorOf(c),d=m.t?new Date(m.t):new Date();
+  st.style.setProperty('--rb',col.hex);
+  st.innerHTML='<div class="rb-veil"></div><div class="rb-date">'+(d.getMonth()+1)+'月'+d.getDate()+'日 · 星期'+'日一二三四五六'[d.getDay()]+'</div>'
+    +'<div class="rb-big'+(flip?'':' turned')+'"><div class="rb-halo"></div>'
+    +'<div class="rb face back"><i class="rb-ring"></i><span>彩虹卡</span><b>今天的颜色 · '+esc(col.name)+'</b></div>'
+    +'<div class="rb face front"><span class="rb-tag">'+esc(col.name+' · '+col.theme)+'</span><p></p><i class="rb-sign">彩虹卡</i></div></div>'
+    +'<p class="rb-say"></p><div class="rb-acts"><button class="again" type="button">再听一遍</button><button class="keep" type="button">收下</button></div>';
+  st.querySelector('.front p').textContent=c.t;
+  if(!read)st.querySelector('.rb-say').textContent=todayLine(m.t)+c.t;
+  var big=st.querySelector('.rb-big');
+  flyVars(big,from||row.querySelector('.rbx'));
+  RB.row=row;RB.m=m;st.className='rb-stage on entering';
+  rbLater(function(){st.classList.remove('entering')},650);
+  if(flip){
+    rbLater(function(){big.classList.add('glint')},650);
+    rbLater(function(){big.classList.add('turned','pop');if(read)readCard(c,S.cur,m,row)},1300);
+    rbLater(function(){sparks(big);try{navigator.vibrate&&navigator.vibrate(12)}catch(e){}},1700);
+    rbLater(function(){st.classList.add('ready')},2300);
+  }else{
+    if(read)rbLater(function(){readCard(c,S.cur,m,row)},500);
+    rbLater(function(){st.classList.add('ready')},650);
+  }
+  setTimeout(function(){try{st.querySelector('.keep').focus({preventScroll:true})}catch(e){}},MOTION?2300:0);
+}
+// 收下：飞回对话里那张卡的位置。声音不停，旁白接着在对话里的卡下面出完
+function closeStage(now){
+  if(!RB||!RB.el.classList.contains('on'))return;
+  RB.timers.forEach(clearTimeout);RB.timers=[];
+  var st=RB.el,row=RB.row;RB.row=null;RB.m=null;
+  if(now||!MOTION){st.className='rb-stage';st.innerHTML='';return}
+  var big=st.querySelector('.rb-big');
+  flyVars(big,row&&row.querySelector('.rbx'));
+  st.classList.remove('entering','ready');st.classList.add('leaving');
+  setTimeout(function(){if(st.classList.contains('leaving')){st.className='rb-stage';st.innerHTML=''}},440);
+}
+RB.el.addEventListener('click',function(e){
+  var t=e.target;
+  if(t===RB.el||t.classList.contains('rb-veil')||t.classList.contains('rb-date')||t.closest('.keep'))closeStage();
+  else if(t.closest('.again')&&RB.m)readCard(cardById(RB.m.card),S.cur,RB.m,RB.row,true);
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&RB.el.classList.contains('on'))closeStage()});
+// 还没选颜色：直接开口说话、或点“先不选”，就收起来，不挡路（今天不再自动放，菜单里还能选）
 function dropCard(){
   if(!pendingCard())return;
   S.logs[S.cur]=S.logs[S.cur].filter(function(x){return !(x.role==='rainbow'&&!x.opened)});save();paintSuggest();
@@ -1373,8 +1567,9 @@ function chatHistory(list,n,clip){
     if(!m.opened||!cardById(m.card)||seen[m.card])return false;
     return seen[m.card]=true;
   }).slice(-(n||16)).map(function(m){
-    if(m.role==='rainbow')return {role:'user',content:'（我抽到一张彩虹卡：「'+cardById(m.card).t+'」）'};
-    return {role:m.role==='user'?'user':'assistant',content:String(m.text).slice(0,clip||500)}});
+    // 卡算这个“你”念给他听的，不算他说的话：他之后的第一句照第一次说。别写成括号里的第三人称旁白，模型会学着在回复里写给自己的备注
+    if(m.role==='rainbow')return {role:'assistant',content:'彩虹卡：「'+cardById(m.card).t+'」'};
+    return {role:m.role==='user'?'user':'assistant',content:String(m.text).slice(0,clip||(m.role==='user'?2000:1000))}});
 }
 function postJSON(url,body,ms){
   var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},ms||30000):0;
@@ -1397,18 +1592,20 @@ function logLocal(pid,why,user,from){
   var said=S.logs[pid].slice(from).filter(function(m){return m.role==='ai'||m.role==='safety'}).map(function(m){return m.text}).join('\n');
   if(said)postJSON('/api/event',{u:S.uid,p:pid,nick:chatContext().nick,kind:'local',why:why,user:user,reply:said},8000).catch(function(){});
 }
+// 只有明确说想死、想自杀才算（压力话、夸张话、“想死你了”“不想活成那样”都不算）；规则同服务端的 CRISIS
+function crisisSaid(t){return /自杀|轻生|结束(自己的)?生命|了结自己|割腕|想死|不想活/.test(String(t).replace(/[得到](想死|不想活)|想死(你|您|他|她|我了)|不想活[成在得]/g,''))}
+var SAFE_SOFT='我在。你这句，我听进去了。先别一个人待着，找个信得过的人陪你一会儿；想找人说说的话，12356 也有人接。';
 async function handle(t){
   dropCard();S.busy=true;setSend();
   push({role:'user',text:t});S.userCount[S.cur]++;
   var pid=S.cur,from=S.logs[pid].length,why='';
   try{
-    if(R.crisis.test(t)){why='crisis';await say(SAFE,{role:'safety',wait:600});return}
     var fixed=R.real.test(t)||R.who.test(t)||R.celeb.test(t)||(pid==='bange'&&R.listen.test(t));  // 身份类问题、半格的“只想说说”走固定回答（带换人按钮）
     why=fixed?'fixed':!CHAT.ok?'offline':'';
-    if(fixed||!CHAT.ok||!(await replyLLM())){why=why||'llm-failed';await (pid==='bange'?replyBange(t):replyPingzuo(t))}
+    if(fixed||!CHAT.ok||!(await replyLLM())){why=why||'llm-failed';if(!fixed&&crisisSaid(t)){why='crisis';await say(SAFE_SOFT,{wait:600})}else await (pid==='bange'?replyBange(t):replyPingzuo(t))}
     if(why)logLocal(pid,why,t,from);
-    if(pid==='pingzuo'&&S.userCount.pingzuo>0&&S.userCount.pingzuo%10===0){var k=S.logs[pid].length;await say('说了这么多，我想问一句：这些话，你今天跟身边的人说过吗？我在这儿挺好，但别只在这儿。');logLocal(pid,'nudge','',k)}
-  }finally{if(why==='crisis')logLocal(pid,why,t,from);S.busy=false;setSend();askVoice()}
+    if(pid==='pingzuo'&&S.userCount.pingzuo>0&&S.userCount.pingzuo%10===0){var k=S.logs[pid].length;await say('说了这么多，我想提一句：这些话，也可以挑一两句跟身边信得过的人说说。我在这儿挺好，但别只在这儿。');logLocal(pid,'nudge','',k)}
+  }finally{S.busy=false;setSend();S.shownAt=Date.now();setTimeout(askVoice,GAP)}
 }
 function startHot(){
   if(S.busy)return;var t=pickHot();
@@ -1427,9 +1624,9 @@ function greeting(id){
   var q=prof(),nick=S.user?S.user.nick:'';
   if(id==='bange'){
     var tags=[q.mbti,q.sign?q.sign+'座':null].filter(Boolean);
-    return nick+'。'+(tags.length?'我看了你的画像，'+tags.join('、')+'。先说好，标签我只信一半，另一半看你接下来说什么。':'')+'今天是什么事，让你想了不止一遍？';
+    return nick+'。'+(tags.length?'我看了你的画像，'+tags.join('、')+'。先说好，标签我只信一半，另一半看你接下来说什么。':'')+'是什么事，让你想了不止一遍？';
   }
-  return nick+'，来了啊。'+(q.kw.length>=2?'看了眼你的画像，说你'+q.kw[0]+'、'+q.kw[1]+'。像不像不要紧，':'')+'今天不用说什么大事，随便说说就行。';
+  return nick+'，来了啊。'+(q.kw.length>=2?'看了眼你的画像，说你'+q.kw[0]+'、'+q.kw[1]+'。像不像不要紧，':'')+'不用说什么大事，随便说说就行。';
 }
 var inMsg=$('#in-msg');
 function setSend(){$('#btn-send').disabled=S.busy||!inMsg.value.trim();var h=$('#btn-hold');if(h)h.disabled=S.busy||(typeof VOICE!=='undefined'&&VOICE.state==='sending')}
@@ -1444,7 +1641,13 @@ async function openLine(id){
   await say(d.text,{wait:1,tid:d.tid});return true;
 }
 async function openChat(id,push_){
-  if(S.busy&&id!==S.cur)return;
+  if(S.busy&&id!==S.cur){  // 上一个自己还在等模型回话：点了不能没反应，说一声，等它说完就打开
+    openChat.want=id;
+    if(!openChat.wait){toast('等'+P[S.cur].name+'把这句说完…');var t0=Date.now();
+      openChat.wait=setInterval(function(){if(S.busy&&Date.now()-t0<60000)return;clearInterval(openChat.wait);openChat.wait=0;
+        if(!S.busy&&$('#s-home').classList.contains('on'))openChat(openChat.want,push_)},250)}
+    return;
+  }
   if(id!==S.cur){stopSpeak();syncSelf()}
   S.cur=id;S.hold=0;S.listening=0;
   stack=['home','chat'];show('chat');paintVoiceBtn();
@@ -1461,7 +1664,7 @@ async function openChat(id,push_){
   if(heard||(newVisit&&(hasAI||(S.self&&S.self.n))))hasAI=(await openLine(id))||hasAI;
   if(!hasAI)await say(greeting(id),{wait:500});
   await cardsP;
-  if(cardDue()&&S.cur===id&&!pendingCard()){await sleep(400);offerCard()}
+  if(cardDue()&&S.cur===id&&!pendingCard()){await gap();if(S.cur===id&&!pendingCard())offerCard()}
   S.busy=false;setSend();askVoice();
 }
 $('#btn-home').addEventListener('click',goHome);
@@ -1478,6 +1681,19 @@ function askVoice(){
   });
   msgs.appendChild(c);var last=msgs.querySelector('.row.ai.last');if(last)follow(last);else scrollDown();  // 不把刚说完的长回复顶出去
 }
+// 聊天卡片上拉全屏：拖小横条，往上过 30px 就全屏，往下就还原；点一下切换。记住用户的选择
+(function(){
+  var g=$('#chat-grip'),pn=$('#chat-panel'),sc=$('#s-chat'),y0=null,h0=0,moved=false;
+  function setFull(on){sc.classList.toggle('full',on);g.setAttribute('aria-label',on?'下拉还原':'上拉全屏');store.set('chatFull',on)}
+  setFull(store.get('chatFull',false));
+  g.addEventListener('pointerdown',function(e){y0=e.clientY;h0=pn.offsetHeight;moved=false;g.setPointerCapture(e.pointerId);pn.style.transition='none'});
+  g.addEventListener('pointermove',function(e){if(y0===null)return;var dy=e.clientY-y0;if(Math.abs(dy)>4)moved=true;
+    var max=sc.clientHeight-sc.querySelector('.chat-head').offsetHeight-6;pn.style.maxHeight=Math.max(160,Math.min(max,h0-dy))+'px'});
+  function end(e){if(y0===null)return;var dy=e.clientY-y0;y0=null;pn.style.transition='';pn.style.maxHeight='';
+    if(!moved)setFull(!sc.classList.contains('full'));else if(dy<-30)setFull(true);else if(dy>30)setFull(false)}
+  g.addEventListener('pointerup',end);g.addEventListener('pointercancel',end);
+  g.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();setFull(!sc.classList.contains('full'))}});
+})();
 function renderSuggest(){var box=$('#suggest');box.innerHTML='';P[S.cur].sug.forEach(function(s){var b=document.createElement('button');b.textContent=s;b.addEventListener('click',function(){if(!S.busy)handle(s)});box.appendChild(b)})}
 inMsg.addEventListener('input',function(){inMsg.style.height='auto';inMsg.style.height=Math.min(120,inMsg.scrollHeight)+'px';setSend()});
 inMsg.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
@@ -1659,8 +1875,8 @@ $('#btn-end').addEventListener('click',async function(){
   S.busy=true;setSend();
   if(lastUser)await syncSelf();
   save();
-  if(rating<=2)await say(id==='bange'?'这次没帮上你，我记下了。下次换个问法。':'今天没陪好你，抱歉。改天再来坐坐。',{wait:500});
-  else if(!closed)await say(id==='bange'?'我记下了。下次见面，我会问你后来怎么样了。':'好。今天就到这儿，早点睡。改天再来坐坐。',{wait:500});
+  if(rating<=2)await say(id==='bange'?'这次没帮上你，我记下了。下次换个问法。':'这次没陪好你，抱歉。改天再来坐坐。',{wait:500});
+  else if(!closed)await say(id==='bange'?'我记下了。下次见面，我会问你后来怎么样了。':'好。就到这儿，早点歇着。改天再来坐坐。',{wait:500});
   S.busy=false;setSend();toast('感谢反馈');
 });
 
@@ -1673,11 +1889,11 @@ function renderMem(){
   refreshSelf(true).then(function(d){
     if(!d){box.innerHTML='<div class="empty">暂时取不到，稍后再看。</div>';return}
     top.innerHTML='<div class="section-t">认识你第 '+d.days+' 天 · 你说过 '+d.msgs+' 句话</div>'+(d.portrait?'<div class="card self-card"><div class="tg">它们眼中的你</div><p></p></div>':'');
-    if(d.portrait)top.querySelector('p').textContent=d.portrait;
+    if(d.portrait)top.querySelector('p').textContent=named(d.portrait);
     if(!d.notes.length){box.innerHTML=none;return}
     box.innerHTML='<div class="group"></div>';var g=box.firstChild;
     d.notes.forEach(function(m){var it=document.createElement('div');it.className='item';
-      it.innerHTML='<div class="grow"></div><button class="del">删除</button>';it.querySelector('.grow').innerHTML=esc(m.text)+'<small>'+esc(m.d)+'</small>';
+      it.innerHTML='<div class="grow"></div><button class="del">删除</button>';it.querySelector('.grow').innerHTML=esc(named(m.text))+'<small>'+esc(m.d)+'</small>';
       it.querySelector('.del').addEventListener('click',function(){
         postJSON('/api/self/forget',{u:S.uid,id:m.id},8000).then(function(){renderMem();toast('已删除，它们不会再提')}).catch(function(){toast('没删成，稍后再试')})});
       g.appendChild(it)});
@@ -1755,12 +1971,46 @@ function renderAdmin(tab){
   }
   if(tab==='hot'){
     h='<p class="note">脚本每天抓热榜，管理员勾选 3–5 条。用户在对话菜单里点“聊聊今天的热点”时，人格用自己的方式拿其中一条开口。以下为示例数据，不涉及真实人物。</p><div class="section-t">候选热点</div><div class="group">';
-    TOPICS.forEach(function(t){h+='<label class="item"><input type="checkbox" class="check" data-id="'+t.id+'"'+(S.hotSel.indexOf(t.id)>-1?' checked':'')+'><div class="grow">'+esc(t.title)+'<small>'+esc(t.tag)+' · 半格：'+esc(t.bange[0].slice(0,22))+'… · 平坐：'+esc(t.pingzuo[0].slice(0,22))+'…</small></div></label>'});
+    TOPICS.forEach(function(t){h+='<label class="item"><input type="checkbox" class="check" data-id="'+t.id+'"'+(S.hotSel.indexOf(t.id)>-1?' checked':'')+'><div class="grow">'+esc(t.title)+'<small>'+esc(t.tag)+' · '+P.bange.name+'：'+esc(t.bange[0].slice(0,22))+'… · 平坐：'+esc(t.pingzuo[0].slice(0,22))+'…</small></div></label>'});
     h+='</div><div style="height:24px"></div>';
     body.innerHTML=h;
     body.querySelectorAll('.check').forEach(function(c){c.addEventListener('change',function(){var id=c.dataset.id;if(c.checked){if(S.hotSel.indexOf(id)<0)S.hotSel.push(id)}else S.hotSel=S.hotSel.filter(function(x){return x!==id});store.set('hotSel',S.hotSel)})});
   }
 }
+
+/* ================= 自动更新 ================= */
+// iOS Safari、微信会把开着的页面一直留在内存里，回到页面时不重新请求，部署后用户看到的还是旧版（2026-11-22 客户一直看到“半格”）。
+// 部署时 BUILD 换成版本号，同时写一个不缓存的 /build.txt。页面每次回到前台、每隔五分钟看一眼，版本变了就趁空闲换到新版本的地址
+// （换地址而不是 reload，绕开微信对同一地址的缓存）。聊天记录在 localStorage，刷新不丢。
+var BUILD='dev';
+(function(){
+  if(BUILD==='dev')return;
+  var want='',timer=0;
+  function idle(){return !S.busy&&!S.narrating&&!inMsg.value.trim()&&VOICE.state==='idle'}
+  function go(){
+    clearTimeout(timer);
+    if(document.hidden)return;
+    if(!idle()){timer=setTimeout(go,20000);return}
+    try{sessionStorage.setItem('mylife.updated','1')}catch(e){}
+    var q=location.search.replace(/([?&])v=[^&#]*&?/,'$1').replace(/[?&]$/,'');
+    location.replace(location.pathname+q+(q?'&':'?')+'v='+encodeURIComponent(want));
+  }
+  function check(){
+    if(document.hidden)return;
+    if(want)return go();
+    fetch('/build.txt?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.ok?r.text():''}).then(function(v){
+      v=v.trim();
+      // 已经用新版本的地址打开过、拿到的还是旧页面：不再跳，免得来回刷新
+      if(!v||v===BUILD||location.search.indexOf('v='+encodeURIComponent(v))>-1)return;
+      want=v;go();
+    }).catch(function(){});
+  }
+  document.addEventListener('visibilitychange',check);
+  window.addEventListener('pageshow',function(e){if(e.persisted)check()});
+  setInterval(check,5*60*1000);
+  check();
+  try{if(sessionStorage.getItem('mylife.updated')){sessionStorage.removeItem('mylife.updated');setTimeout(function(){toast('已更新到最新版')},800)}}catch(e){}
+})();
 
 /* ================= 启动 ================= */
 // 外层框不允许被滚动（键盘弹出、自动滚动到焦点时会把藏在框外的弹层带出来）；不支持 overflow:clip 的浏览器靠这里归零

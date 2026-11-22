@@ -10,6 +10,7 @@ Endpoints
   POST /api/card     {p, u, id}                               -> {ok}   今天抽到的彩虹卡记进长期记忆（卡由页面念，不接话）
   POST /api/open     {p, u, nick}                             -> {text, model, ms, tid}   进对话时先开口（两个人格记忆共享）
   POST /api/closing  {p, u, nick, history}                    -> {text, model, ms, tid}   收尾一句
+  POST /api/portrait {u, sign, mbti, blood, animal}          -> {sign:[{h,t}], mbti:[{h,t}], mix, heard}  性格画像的展开
   POST /api/sync     {u}  fold the latest talk into long-term memory (server/memory.py)
   POST /api/self/forget {u, id} | /api/self/wipe {u} | /api/self/import {u, notes}
   POST /api/fb       {p, u, tid, mid, v, reply, user}         👍/👎 on one reply
@@ -40,7 +41,7 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from memory import NEW_USER_LINE, Memory, valid_uid, write_json_atomic
+from memory import NEW_USER_LINE, Memory, parse_json, valid_uid, write_json_atomic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOG_PATH = os.environ.get("MYLIFE_VOICES", os.path.join(HERE, "voices.json"))
@@ -244,19 +245,39 @@ CHAT_PRIMARY = (os.environ.get("MYLIFE_CHAT_ENDPOINT", "tokenhub"),
                 os.environ.get("MYLIFE_CHAT_MODEL", "deepseek-v4.1-flash"))
 CHAT_FALLBACK = (os.environ.get("MYLIFE_CHAT_FALLBACK_ENDPOINT", "dashscope"),
                  os.environ.get("MYLIFE_CHAT_FALLBACK_MODEL", "qwen3.8-max"))
-PERSONAS = {"bange": ("半格", "理性", "pingzuo"), "pingzuo": ("平坐", "陪伴", "bange")}
+BASE_NAMES = {"bange": "半格", "pingzuo": "平坐"}
+# Display names (user 2026-11-22: 导师 / 伙伴; earlier that day the test code names 黄执中 / 大麦哥). The prompt files keep
+# 半格/平坐 and system_prompt() swaps these in. MYLIFE_TEST_ALIAS=0 falls back to the placeholder names.
+ALIAS = {"bange": "导师", "pingzuo": "伙伴"} if os.environ.get("MYLIFE_TEST_ALIAS", "1") != "0" else {}
+PERSONAS = {"bange": (ALIAS.get("bange", "半格"), "理性", "pingzuo"), "pingzuo": (ALIAS.get("pingzuo", "平坐"), "陪伴", "bange")}
+ALIAS_NOTE = ("【名字】你在界面上叫“%s”，另一个自己叫“%s”。名字只是个称呼，你还是他的另一个自己。%s"
+              "你也没有自己的生活：爱好、运动、工作、婚姻、家人、身体，一样都没有；"
+              "被问到（比如骑不骑车、离没离婚、以前做什么），就说你没有自己的日子，知道的都是对方告诉你的。")
+# What each name must not turn into (a title invites the matching stance).
+NAME_NOTE = {"导师": "叫“导师”不等于比他高一辈：不说教，不讲大道理，不布置作业，不叫他“同学”“孩子”，不说“作为你的导师”；"
+                     "你跟他站在同一边，只是多看半步。",
+             "伙伴": "“伙伴”就是陪他一起走的那个，不端着，不说“作为你的伙伴”。"}
 PERSONA_DIR = os.environ.get("MYLIFE_PERSONAS", os.path.join(HERE, "personas"))
 PROMPT_DIR = os.path.join(HERE, "prompts")
 STYLE_PATH = os.environ.get("MYLIFE_STYLE", os.path.join(PROMPT_DIR, "de-ai-style.txt"))
 SELF_FRAME_PATH = os.environ.get("MYLIFE_SELF_FRAME", os.path.join(PROMPT_DIR, "self-frame.txt"))
 CLOSING_PATH = os.environ.get("MYLIFE_CLOSING_STYLE", os.path.join(PROMPT_DIR, "closing-style.txt"))
 CARDS_PATH = os.environ.get("MYLIFE_CARDS", os.path.join(PROMPT_DIR, "rainbow-cards.json"))
-OUTPUT_RULE = ("只输出你要说的话本身：纯文本，不加引号，不加名字前缀，不写动作或旁白。"
+PORTRAIT_PATH = os.environ.get("MYLIFE_PORTRAIT", os.path.join(PROMPT_DIR, "portrait.txt"))
+PORTRAIT_HEARD_PATH = os.path.join(os.path.dirname(PORTRAIT_PATH), "portrait-heard.txt")
+SIGNS = {"白羊": "火", "狮子": "火", "射手": "火", "金牛": "土", "处女": "土", "摩羯": "土",
+         "双子": "风", "天秤": "风", "水瓶": "风", "巨蟹": "水", "天蝎": "水", "双鱼": "水"}
+MBTI_TYPES = {a + b + c + d for a in "EI" for b in "SN" for c in "TF" for d in "JP"}
+BLOOD_TYPES = ("A", "B", "O", "AB")
+ANIMALS = "鼠牛虎兔龙蛇马羊猴鸡狗猪"
+OUTPUT_RULE = ("只输出你要说的话本身：纯文本，不加引号，不加名字前缀，不写动作或旁白，"
+               "不写括号里的备注、自言自语或写给自己的提示；对他说话用“你”，不在回复里用“他”指他。"
                "说到他的事，只用他这次聊天里说过的和“你对他的了解”里写着的；“上次”“你说过”“你每次”这类话，"
-               "只在那里有记录时才说。没有的细节不编，拿不准就问。")
+               "只在那里有记录时才说。没有的细节不编，拿不准就说“我猜”，或者不说。")
+HIST_CLIP = {"user": 2000, "assistant": 1000}  # per turn, in 字 (was 500: a long story got cut mid-sentence)
 CHAT_MAX_TOKENS = 1100  # room for REPLY_MAX 字; everyday replies stay short anyway
 REPLY_MAX = 900  # hard cap on a chat reply in 字 (memory.DEPTH lowers it while the selves barely know him)
-CHAT_PER_MIN = int(os.environ.get("MYLIFE_CHAT_PER_MIN", "20"))
+CHAT_PER_MIN = int(os.environ.get("MYLIFE_CHAT_PER_MIN", "100"))  # per IP; testers often share one office Wi-Fi
 CHAT_DAILY = int(os.environ.get("MYLIFE_CHAT_DAILY", "3000"))
 ASR_PER_MIN = int(os.environ.get("MYLIFE_ASR_PER_MIN", "20"))
 ASR_DAILY = int(os.environ.get("MYLIFE_ASR_DAILY", "3000"))
@@ -267,21 +288,55 @@ FB_PER_MIN = 60
 STYLE_ASK = re.compile(r"(?:请你?|麻烦你?|你(?:能不能|可以|就)?|能不能)?(?:用|按照?|学|模仿|以)([^，。！？,.!?\s]{1,20}?)的?"
                        r"(?:口吻|风格|语气|腔调|说话方式|方式)(?:来)?(?:回复|回答|回)?(?:我)?(?:一下)?")
 STYLE_WHO = re.compile(r"黄执中|大麦哥|博主|网红|名人|明星|主播|老师|抖音|小红书|B站|知乎|奇葩说")
-# Same signals as the page's R.crisis plus a few softer ones; the page answers the explicit ones with a
-# fixed safety message before calling us, this is the net for whatever reaches the model.
-CRISIS = re.compile(r"(不想活|自杀|想死|轻生|结束生命|活着(好|真|太|也)?没(什么)?意思|活着没有意义|活着有什么意义"
-                    r"|不想醒来|消失了?也?(没有?|不会有)人|了结自己|割腕|安眠药|撑不下去|不想再撑)")
-SAFETY_LINE = "如果你有伤害自己的念头，请马上联系身边信任的人，或拨打心理援助热线 12356；情况紧急请拨打 110 或 120。"
+# A healing app, not a crisis line (client 2026-11-22: "危机处理做的太重了…没有人想听到让打热线"). Only an explicit
+# wish to die counts here; the page uses the same rule (crisisSaid). Stress and hyperbole ("撑不住了", "累得想死",
+# "想死你了", "不想活成我妈那样") are ordinary talk; "活着没意思" / "想消失" the selves hold in their own words (persona
+# 【安全】) without hotlines or "are you safe?".
+CRISIS = re.compile(r"自杀|轻生|结束(自己的)?生命|了结自己|割腕|(?<![得到])想死(?![你您他她]|我了)|(?<![得到])不想活(?![成在得])")
+SAFETY_LINE = "要是这个念头一直压着你，先别一个人扛，找个信得过的人陪你待一会儿。想找人说说的话，12356 也有人接。"
+# Sentences that treat him as at risk; dropped unless he said something explicit recently.
+AT_RISK = re.compile(r"12356|心理援助|热线|伤害自己|轻生|自杀|不想活|现在安全吗|安不安全")
+# Client: no time words — the selves don't know when he is reading. The prompt forbids them; this catches the stock
+# "今晚先…" / "今天就…" / "明天再说" that still slip through, unless he used the word himself.
+TIME_ADV = re.compile(r"(今晚|今天|今夜)(?=先|就|才|没|要是|能|别|不用|可以|只|也|还|不)")
 
 
-def postprocess(user_text, reply):
-    reply = reply.strip()
+def untime(reply, recent):
+    if "明天" not in recent:
+        reply = reply.replace("明天的事明天再说", "后面的事回头再说").replace("明天再说", "回头再说")
+    return TIME_ADV.sub(lambda m: m.group(0) if m.group(1) in recent else "", reply)
+
+
+def postprocess(user_text, reply, recent=None, told=False):
+    """recent = his last few lines (chat only). When none of them is an explicit wish to die, sentences that bring up the
+    hotline or self-harm are dropped. When his line is one, one soft line is added, once per chat (told = said before).
+    With recent, stock time words he didn't use are taken out (see untime)."""
+    if recent is not None:
+        reply = untime(reply, recent)
+    reply = drop_asides(reply.strip())
     if len(reply) > 1 and reply[0] in "“\"" and reply[-1] in "”\"" and not re.search("[“”\"]", reply[1:-1]):
         reply = reply[1:-1].strip()  # the model wrapped the whole reply in quotes; a quote that opens a sentence stays
     reply = re.sub(r'"([^"\n]{1,60})"', r"“\1”", reply)  # 中文里的成对半角引号换成全角
-    if CRISIS.search(user_text or "") and "12356" not in reply:
-        reply += "\n\n" + SAFETY_LINE
+    if CRISIS.search(user_text or ""):
+        if not told and "12356" not in reply:
+            reply += "\n\n" + SAFETY_LINE
+    elif recent is not None and not CRISIS.search(recent) and AT_RISK.search(reply):
+        paras = [re.sub(r"[^。！？\n]*(?:%s)[^。！？\n]*[。！？]?" % AT_RISK.pattern, "", p).strip() for p in reply.split("\n")]
+        reply = "\n\n".join(p for p in paras if p) or reply
     return reply
+
+
+ASIDE = re.compile(r"[（(][^（）()\n]*[）)]")
+
+
+def drop_asides(reply):
+    """Bracketed notes the model writes to itself (a whole paragraph in brackets, or one opening the reply) never reach him."""
+    paras = [p for p in reply.split("\n") if not ASIDE.fullmatch(p.strip())]
+    out = "\n".join(paras).strip()
+    m = ASIDE.match(out)
+    if m and "他" in m.group(0):
+        out = out[m.end():].strip()
+    return re.sub(r"\n{3,}", "\n\n", out) or reply
 
 
 # ---------------------------------------------------------------- LLM
@@ -372,17 +427,68 @@ def clip(s, n):
     return str(s or "").strip()[:n]
 
 
+@functools.lru_cache(maxsize=None)
+def view_library(pid):
+    """personas/<pid>/观点库.json: topic cards distilled from the style reference's public talks and the comments under
+    them (research in personas/pingzuo/调研/02). Paraphrased; no names, life facts or quotes. No file = no library."""
+    try:
+        with open(os.path.join(PERSONA_DIR, pid, "观点库.json"), encoding="utf-8") as f:
+            return {t["id"]: t for t in json.load(f)}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+ROUTE_PROMPT = ("下面是一些话题（括号里是这类话常见的说法）。读他最近说的话，挑出和他正在说的这件事真正贴得上的话题，最多两个，"
+                "只输出编号，用逗号隔开。宁少勿多：只是沾到一个词、其实不是一回事的不选；都贴不上，就只输出：无\n\n%s")
+
+
+def pick_views(pid, users, ask):
+    """Up to two topic ids for what he is talking about (a short model call: ask(msgs) -> text). Skipped for one-liners
+    like "嗯" or "好累", and when the persona has no library."""
+    lib = view_library(pid)
+    if not lib or not users or len(users[-1]) < 6:
+        return []
+    topics = "\n".join("%s %s（%s）" % (i, t["topic"], "、".join(t["triggers"][:5])) for i, t in lib.items())
+    try:
+        text = ask([{"role": "system", "content": ROUTE_PROMPT % topics}, {"role": "user", "content": "\n".join(users[-3:])}])
+    except LLMError:
+        return []
+    return [i for i in dict.fromkeys(re.findall(r"t\d{2}", text or "")) if i in lib][:2]
+
+
+def views_block(pid, ids):
+    cards = [view_library(pid)[i] for i in ids if i in view_library(pid)]
+    if not cards:
+        return ""
+    out = ["【可以借的看法】下面是跟他这件事有关的一些看法和说话思路，是你说话方式的参考来源，不是你的经历。"
+           "合适就挑一两点，用你自己的话、按他说的事说出来；不合适就不用。不照抄句子，不提出处，不说“有人说过”“很多人觉得”，不讲任何人的经历。"
+           "里面的场景、细节、例子都是别人的，不能安到他头上：说到他的事，只用他自己说过的，他没说过的（比如搬没搬过家、生没生过病、无不无聊）不替他补。"]
+    untimed = lambda s: re.sub(r"今晚|今天|今夜|明天|昨天", "", s)
+    for c in cards:  # no example lines: the model copied them word for word ("给自己弄口热的吃")
+        out.append("话题：%s\n看法：%s\n思路：%s\n听的人被戳中的地方（只帮你拿捏分寸，不转述，不安到他身上）：%s"
+                   % (c["topic"], untimed(c["view"]), c["move"], untimed(c["resonance"])))
+    return "\n\n".join(out)
+
+
 def system_prompt(pid, *blocks):
-    """Every endpoint's system prompt: persona, then the blocks it opts into, then the output rule."""
-    return "\n\n".join([persona_prompt(pid)] + [b for b in blocks if b] + [OUTPUT_RULE])
+    """Every endpoint's system prompt: persona, then the blocks it opts into, then the output rule. With test code names
+    on, the prompt files' 半格/平坐 become the display names and the persona is told what its name does not mean."""
+    text = "\n\n".join([persona_prompt(pid)] + [b for b in blocks if b] + [OUTPUT_RULE])
+    if not ALIAS:
+        return text
+    for pp, base in BASE_NAMES.items():
+        text = text.replace(base, ALIAS[pp])
+    other = PERSONAS[pid][2]
+    return ALIAS_NOTE % (ALIAS[pid], ALIAS[other], NAME_NOTE.get(ALIAS[pid], "")) + "\n\n" + text
 
 
 def user_block(req):
     return "【这位用户】\n称呼：%s" % (clip(req.get("nick"), 12) or "朋友")
 
 
-def build_messages(pid, req, know=None):
-    """Chat: persona + who the user is (+ what the selves know) + the last 16 turns."""
+def build_messages(pid, req, know=None, views=""):
+    """Chat: persona + who the user is (+ what the selves know) (+ view cards for what he is talking about) + the last
+    16 turns."""
     name, _, other = PERSONAS[pid]
     oname, okind, _ = PERSONAS[other]
     ctx = [user_block(req)]
@@ -393,12 +499,23 @@ def build_messages(pid, req, know=None):
     if notme:
         ctx.append("用户标了“不像我”的画像条目（不要再拿这些说事）：" + notme)
     ctx.append(know or NEW_USER_LINE)
-    ctx.append("【此刻】今天是 %s。用户正在和你（%s）聊。另一位是%s（%s）；当用户需要的东西%s更合适时，可以建议去找%s。"
-               % (datetime.date.today().isoformat(), name, oname, okind, oname, oname))
+    if views:
+        ctx.append(views)
+    now = ("【此刻】日期 %s（你心里有数就行，回复里不说今天、今晚这类时间词）。用户正在和你（%s）聊。另一位是%s（%s）；当用户需要的东西%s更合适时，可以建议去找%s，只说那一位更擅长什么，不说你们之间通气、知道彼此聊过什么。"
+           % (datetime.date.today().isoformat(), name, oname, okind, oname, oname))
+    hist = req.get("history") or []
+    last_ai = next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
+    if pid == "pingzuo":
+        now += "这一条不提问，不用问号。"
+    elif "？" in last_ai or "?" in last_ai:  # users: "我说一句问我一句，更累了"
+        said = str(hist[-1].get("content") or "").strip() if hist else ""
+        now += ("他只回了“%s”，是在答你上一条的问题，不想被接着追问。" % said if len(said) <= 10 else "你上一条问过他了，他也答了。") \
+            + "这一条不提问，不用问号，也不说“我不问了”这类话：顺着他说的，把你的看法说出来，用一句判断收住。"
+    ctx.append(now)
     msgs = [{"role": "system", "content": system_prompt(pid, "\n".join(ctx))}]
-    for h in (req.get("history") or [])[-16:]:
+    for h in hist[-16:]:
         role = "user" if h.get("role") == "user" else "assistant"
-        content = clip(h.get("content"), 500)
+        content = clip(h.get("content"), HIST_CLIP[role])
         if content:
             if msgs[-1]["role"] == role:
                 msgs[-1]["content"] += "\n" + content  # merge consecutive same-role turns
@@ -408,6 +525,28 @@ def build_messages(pid, req, know=None):
         raise ValueError("last message must be from the user")
     msgs[-1]["content"] = strip_style_ask(msgs[-1]["content"])
     return msgs
+
+
+def portrait_facts(sign, mbti, blood, animal):
+    return "\n".join(x for x in ("星座：%s座（%s象）" % (sign, SIGNS[sign]) if sign else "", "MBTI：" + mbti if mbti else "",
+                                 "血型：%s 型" % blood if blood else "", "生肖：" + animal if animal else "") if x)
+
+
+def build_portrait(facts, heard=None):
+    """性格画像的展开. Two separate asks, so what he said never gets passed off as astrology: the sign/MBTI read sees
+    only what he filled in (-> one JSON object); `heard` (his memory) goes to its own short paragraph."""
+    if heard is None:
+        return [{"role": "system", "content": _read(PORTRAIT_PATH)}, {"role": "user", "content": facts}]
+    return [{"role": "system", "content": _read(PORTRAIT_HEARD_PATH)},
+            {"role": "user", "content": (facts + "\n" if facts else "") + "他说过的事：\n" + heard}]
+
+
+def tidy_portrait(data, heard):
+    def facets(v):
+        return [{"h": clip(f.get("h"), 12), "t": clip(f.get("t"), 220)} for f in (v if isinstance(v, list) else [])[:5]
+                if isinstance(f, dict) and f.get("h") and f.get("t")]
+    return {"sign": facets(data.get("sign")), "mbti": facets(data.get("mbti")), "mix": clip(data.get("mix"), 320),
+            "heard": clip(re.sub(r"^从你说过的话里?看[，,：:]?", "", heard.strip("“”\"' \n")), 360)}  # the card already says it
 
 
 CLOSING_TASK = ("【现在】用户要结束这次聊天了。用你（%s）的口吻，对用户说最后一句话，把今天聊的东西收住。"
@@ -480,14 +619,16 @@ def tidy_closing(text):
 
 
 OPENING_TASK = ("【现在】他刚打开和你（%s）的对话，还没说话。你先开口：一到两句，不超过五十个字。"
-                "“你对他的了解”里有他最近跟另一个自己聊的事，或者最近一次聊天，就自然接上（比如“你刚才跟%s说的那件事……”），"
-                "再问一个好回答的小问题；那里什么都没有，就简单打个招呼。不说“我看了记录”，不复述一大段，不提你记得多少。")
+                "“你对他的了解”里有他最近说的事，就自然接上（比如“上回你说的那件事……”），"
+                "%s；那里什么都没有，就简单打个招呼。不说“我看了记录”，不复述一大段，不提你记得多少，"
+                "不说他是跟谁说的，不提另一个自己。")
+OPENING_END = {"bange": "可以再问一个好回答的小问题",  # 伙伴 doesn't ask: users said being asked every line made them more tired
+               "pingzuo": "再说一句陪着的话，让他知道想说就说、说一半也行，不提问，不用问号"}
 
 
 def build_opening(pid, req, know=None):
     """开场一句: persona + who the user is + what the selves know (shared) + task."""
-    name, _, other = PERSONAS[pid]
-    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, OPENING_TASK % (name, PERSONAS[other][0]))
+    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, OPENING_TASK % (PERSONAS[pid][0], OPENING_END[pid]))
     return [{"role": "system", "content": system}, {"role": "user", "content": "（他打开了和你的对话）"}]
 
 
@@ -507,8 +648,7 @@ class App:
         self.pool = ThreadPoolExecutor(max_workers=6)       # audio chunks, on the request path
         self.fold_pool = ThreadPoolExecutor(max_workers=2)  # memory folds, in the background
         self.mem = Memory(os.path.join(DATA_DIR, "users"),
-                          lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0],
-                          {pid: p[0] for pid, p in PERSONAS.items()})
+                          lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0])
         self.lock = threading.Lock()       # rate limits
         self.disk_lock = threading.Lock()  # usage.json and the jsonl logs
         self.hits = {k: defaultdict(deque) for k in ("tts", "chat", "asr", "fb")}
@@ -559,14 +699,17 @@ class App:
         uid = req.get("u") if valid_uid(req.get("u")) else None
         users = [clip(h.get("content"), 300) for h in (req.get("history") or [])[-6:] if h.get("role") == "user"]
         know = self.mem.context(uid, " ".join(users[-3:]), pid) if uid else None
-        msgs = build_messages(pid, req, know)
+        vids = pick_views(pid, users, lambda m: self.llm(m, max_tokens=20, temperature=0, timeout=8)[0])
+        msgs = build_messages(pid, req, know, views_block(pid, vids))
         raw, model, ms = self.llm(msgs, max_tokens=CHAT_MAX_TOKENS, timeout=40)
-        cap = self.mem.reply_cap(uid) if uid else REPLY_MAX
+        cap = self.mem.reply_cap(uid, pid) if uid else REPLY_MAX
         fitted = fit(raw, cap)
-        reply = postprocess(msgs[-1]["content"], fitted)
+        told = any("12356" in str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") != "user")
+        reply = postprocess(msgs[-1]["content"], fitted, " ".join(users), told)
         tid = self.log("chat", who, pid, req, user=msgs[-1]["content"], reply=reply, raw=raw if fitted != raw else None,
-                       cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, hist=req.get("history"))
-        if uid and self.mem.append(uid, pid, [("user", users[-1] if users else msgs[-1]["content"]), ("ai", reply)]) >= 8:
+                       cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, views=vids or None,
+                       hist=req.get("history"))
+        if uid and self.mem.append(uid, pid, [("user", clip(msgs[-1]["content"], 1000)), ("ai", reply)]) >= 8:
             self.fold_pool.submit(self.fold, uid, 8)
         return {"reply": reply, "model": model, "ms": ms, "tid": tid}
 
@@ -574,7 +717,7 @@ class App:
         """One sentence that sums up the session, said when the user taps 结束本次对话."""
         msgs, said = build_closing(pid, req)
         text, model, ms = self.llm(msgs, max_tokens=120, temperature=0.7, tidy=tidy_closing)
-        text = postprocess(said, text)
+        text = postprocess("", text)  # the closing line never carries the hotline
         tid = self.log("closing", who, pid, req, user=said, reply=text, model=model, ms=ms, pv=prompt_version(pid))
         if valid_uid(req.get("u")):
             self.mem.append(req["u"], pid, [("closing", text)])
@@ -590,6 +733,36 @@ class App:
         text = postprocess("", fit(text, 80))
         tid = self.log("open", who, pid, req, reply=text, model=model, ms=ms, pv=prompt_version(pid), know=know)
         return {"text": text, "model": model, "ms": ms, "tid": tid}
+
+    def portrait(self, req, who):
+        """The portrait page's longer read of his sign and MBTI, and (once he has talked) of what he has said."""
+        sign, mbti = str(req.get("sign") or ""), str(req.get("mbti") or "").upper()
+        blood, animal = str(req.get("blood") or "").upper(), str(req.get("animal") or "")
+        sign, mbti = (sign if sign in SIGNS else ""), (mbti if mbti in MBTI_TYPES else "")
+        blood, animal = (blood if blood in BLOOD_TYPES else ""), (animal if len(animal) == 1 and animal in ANIMALS else "")
+        if not (sign or mbti):
+            raise ValueError("need a sign or an MBTI type")
+        uid = req.get("u") if valid_uid(req.get("u")) else None
+        heard = ""
+        if uid:
+            s = self.mem.summary(uid)
+            heard = "\n".join(([s["portrait"]] if s["portrait"] else []) + ["- " + n["text"] for n in s["notes"][:15]])
+        facts = portrait_facts(sign, mbti, blood, animal)
+        with ThreadPoolExecutor(2) as pool:
+            said = pool.submit(self.llm, build_portrait(facts, heard), 500, 0.8, 40) if heard else None
+            for _ in range(2):  # now and then the model drops a section or renames its fields: ask once more
+                raw, model, ms = self.llm(build_portrait(facts), max_tokens=1400, timeout=60)
+                out = tidy_portrait(parse_json(raw) or {}, "")
+                if (out["sign"] or not sign) and (out["mbti"] or not mbti) and out["mix"]:
+                    break
+            try:
+                out["heard"] = tidy_portrait({}, said.result()[0])["heard"] if said else ""
+            except LLMError:
+                pass  # the sign/MBTI read still stands without it
+        if not (out["sign"] or out["mbti"]):
+            raise LLMError("portrait: nothing usable in the answer")
+        self.log("portrait", who, "", req, sign=sign, mbti=mbti, reply=json.dumps(out, ensure_ascii=False), model=model, ms=ms)
+        return out
 
     def fold(self, uid, min_user):
         try:
@@ -727,10 +900,24 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/sync": self.handle_self, "/api/card": self.handle_self, "/api/self/forget": self.handle_self,
                    "/api/self/wipe": self.handle_self, "/api/self/import": self.handle_self,
                    "/api/fb": self.handle_fb, "/api/event": self.handle_fb, "/api/asr": self.handle_asr,
-                   "/api/tts": self.handle_tts}.get(path)
+                   "/api/tts": self.handle_tts, "/api/portrait": self.handle_portrait}.get(path)
         if not handler:
             return self.send_json(404, {"error": "not found"})
         return handler(path)
+
+    def handle_portrait(self, path):
+        try:
+            req = self.read_json(4000)
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        if self.limited("chat"):
+            return None
+        try:
+            return self.send_json(200, APP.portrait(req, self.who()))
+        except ValueError as e:
+            return self.send_json(400, {"error": str(e)})
+        except LLMError as e:
+            return self.llm_failed(e)
 
     def handle_llm(self, path):
         """/api/chat, /api/closing, /api/open: {p, u, nick, ...} -> the persona's words."""
@@ -750,7 +937,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": str(e)})
         except LLMError as e:
             last = next((h.get("content") for h in reversed(req.get("history") or []) if h.get("role") == "user"), None)
-            APP.log("error", self.who(), pid, req, path=path, error=str(e)[:300], user=clip(last, 500))
+            APP.log("error", self.who(), pid, req, path=path, error=str(e)[:300], user=clip(last, 2000))
             return self.llm_failed(e)
 
     def handle_self(self, path):
@@ -763,7 +950,9 @@ class Handler(BaseHTTPRequestHandler):
         uid = req.get("u")
         if not valid_uid(uid):
             return self.send_json(400, {"error": "bad user id"})
-        if self.limited("chat" if path == "/api/sync" else "fb"):
+        # /api/sync fires on every switch between the selves; on the chat budget it starved his real messages (429 ->
+        # scripted reply). It only spends a model call when there are new lines, and those already passed /api/chat.
+        if self.limited("fb"):
             return None
         if path == "/api/sync":
             r = APP.fold(uid, 2) or {"add": [], "episode": ""}
@@ -773,7 +962,7 @@ class Handler(BaseHTTPRequestHandler):
             pid = str(req.get("p", ""))
             if not card or pid not in PERSONAS:
                 return self.send_json(400, {"error": "unknown card"})
-            APP.mem.append(uid, pid, [("card", "（抽到今天的彩虹卡「%s」）" % card["t"])])
+            APP.mem.append(uid, pid, [("card", "抽到今天的彩虹卡「%s」" % card["t"])])
             APP.log("card", self.who(), pid, req, card=card["id"], reply=card["t"])
             return self.send_json(200, {"ok": True})
         if path == "/api/self/forget":

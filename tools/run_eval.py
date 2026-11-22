@@ -10,6 +10,7 @@ turns 最后一条必须是 user。结果写到 personas/<id>/eval-runs/<时间>
 密钥从 .secrets/mylife.env 读入环境变量（tools/_boot.py），不写进代码。
 """
 import argparse
+import tempfile
 import datetime
 import json
 import os
@@ -18,6 +19,12 @@ from concurrent.futures import ThreadPoolExecutor
 from _boot import ROOT, server
 
 srv = server()
+from memory import Memory, depth  # noqa: E402  (server() puts server/ on the path)
+
+
+def new_user_know(pid):
+    """memory.context() for a user the selves have never heard from: evals measure what a new user would get."""
+    return Memory(tempfile.mkdtemp(prefix="eval-mem-"), None).context("evalnewuser00000000", "", pid)
 
 
 def main():
@@ -39,13 +46,16 @@ def main():
 
     def run(c):
         req = {"nick": args.nick, "profile": args.profile, "history": c["turns"]}
-        msgs = srv.build_messages(args.persona, req)
+        users = [t["content"] for t in c["turns"][-6:] if t["role"] == "user"]
+        vids = srv.pick_views(args.persona, users, lambda m: srv.complete(m, 20, 0, 8)[0])
+        msgs = srv.build_messages(args.persona, req, new_user_know(args.persona), srv.views_block(args.persona, vids))  # as /api/chat
         t0 = datetime.datetime.now()
         try:
-            reply, err = srv.postprocess(msgs[-1]["content"], srv.fit(srv.llm_call(args.endpoint, args.model, msgs, srv.CHAT_MAX_TOKENS, timeout=40))), None
+            said = " ".join(t["content"] for t in c["turns"][-6:] if t["role"] == "user")  # same as /api/chat
+            reply, err = srv.postprocess(msgs[-1]["content"], srv.fit(srv.llm_call(args.endpoint, args.model, msgs, srv.CHAT_MAX_TOKENS, timeout=40), depth(0, args.persona)[1]), said), None
         except srv.LLMError as e:
             reply, err = None, str(e)
-        return dict(c, reply=reply, error=err, secs=(datetime.datetime.now() - t0).total_seconds(),
+        return dict(c, reply=reply, error=err, views=vids, secs=(datetime.datetime.now() - t0).total_seconds(),
                     system_chars=len(msgs[0]["content"]))
 
     with ThreadPoolExecutor(max_workers=4) as pool:

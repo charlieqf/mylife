@@ -28,24 +28,31 @@ LEVELS = (3, 8, 16, 28, 45)  # score thresholds for how "formed" the other selve
 NEW_USER_LINE = "（你们刚认识，你还不知道他的任何事：不要提“上次”“上周”“那件事”这类往事。）"
 # How much to say when he brings something heavy or asks to be talked through it; grows with how well the selves
 # know him. (up to this level, hard cap in 字 that the server trims to, what the prompt asks for)
-DEPTH = ((1, 460, "你还不太了解他：他讲一件压着他的事、要你开导时，围着他刚说的话说两三小段，不超过四百字；有内容，但不往外猜他的生活，不装作很懂他。"),
-         (3, 680, "你对他有些了解了：他讲一件压着他的事、要你开导时，说三五小段，不超过六百字；能连上他以前说过的就连上。"),
-         (5, 900, "你已经挺了解他了：他讲一件压着他的事、要你开导时，可以把话说透，不超过八百字；把今天的事和他以前说过的事、他的习惯连起来。"))
+DEPTH = ((1, 560, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。但了解得少，不妨碍把他刚说的这件事说透：他说起最近的样子、讲一件压着他的事、或要你开导时，就围着他的原话往深里说，三四小段，三四百字左右，最多五百字。"),
+         (3, 720, "你对他有些了解了：他讲一件压着他的事、要你开导时，说四五小段，不超过六百五十字；能连上他以前说过的就连上。"),
+         (5, 900, "你已经挺了解他了：他讲一件压着他的事、要你开导时，可以把话说透，不超过八百字；把这次说的事和他以前说过的事、他的习惯连起来。"))
 
 
-def depth(lv):
-    return next(d for d in DEPTH if lv <= d[0])
+# 伙伴 (pingzuo) sits with him rather than taking the thing apart: fewer, shorter paragraphs at every level.
+DEPTH_PINGZUO = ((1, 400, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。他讲一件压着他的事、要你开导时，陪他慢慢说两三段，两三百字，最多三百五十字。"),
+                 (3, 500, "你对他有些了解了：他讲一件压着他的事、要你开导时，陪他慢慢说三段左右，不超过四百五十字；能想起他以前说过的就轻轻提一句。"),
+                 (5, 620, "你已经挺了解他了：他讲一件压着他的事、要你开导时，陪他慢慢说，不超过五百五十字；可以想起他以前扛过的事、他的习惯。"))
+
+
+def depth(lv, pid=None):
+    return next(d for d in (DEPTH_PINGZUO if pid == "pingzuo" else DEPTH) if lv <= d[0])
 
 CONSOLIDATE_PROMPT = """你在帮一个人的“另一个自己”整理记忆。下面有三部分：已经知道的他（画像和记住的事），以及这次新的聊天记录。
 读完这次的聊天，输出一个 JSON 对象（只输出 JSON，不要别的字）：
 {
-  "episode": "这次聊了什么、他是什么状态，一句话，以“你”开头，不超过 50 个字",
+  "episode": "这次他说了什么、他是什么状态，一句话，以“你”开头，不超过 50 个字；只写他说的，不写 AI 怎么回的",
   "add": ["这次新知道的、以后值得记住的事，以“你”开头，每条不超过 30 个字，最多 4 条"],
   "drop": ["已记住的事里，被这次的新信息推翻或重复了的条目 id"],
   "portrait": "更新后的“你是怎样的人”，第二人称“你”，不超过 220 个字"
 }
-写 add 的规则：只写他亲口说过的事实、处境、在意的人和东西、做过的决定、说过的心愿；带上具体的名字、时间、数字；不写建议，不评价，不写 AI 说了什么；已经记过的不重复写；没有就给空数组。
-写 portrait 的规则：在原来的基础上改，不要推倒重写；写他的处境、在意的人和事、反复出现的心事和情绪、做事和说话的习惯、他常用的词和说法（用引号原样保留几个）；只写聊天里有根据的，不推测，不下诊断，不评判好坏。
+写 add 的规则：不写他是跟哪个“自己”说的；只写他亲口说过的事实、处境、在意的人和东西、做过的决定、说过的心愿；带上具体的名字、时间、数字；不写建议，不评价，不写 AI 说了什么；AI 替他说出的心里话和猜测（比如“你心里那句……”“你其实是怕……”）不是他说的，一律不记，拿不准是谁说的就不记；已经记过的不重复写；没有就给空数组。
+标着“AI（只作上下文）”的行是 AI 说的：里面替他说的心里话、猜测、比方，都不是他说的，add 和 portrait 都不能用。
+写 portrait 的规则：在原来的基础上改，不要推倒重写；写他的处境、在意的人和事、反复出现的心事和情绪、做事和说话的习惯、他常用的词和说法（用引号原样保留几个，只能是标着“他”的行里的原话）；只写聊天里他自己的话有根据的（AI 的猜测和替他说的话不算），不推测，不下诊断，不评判好坏。
 如果这次聊天里几乎没有新东西，episode 照写，add 给空数组，portrait 原样返回。"""
 
 
@@ -73,12 +80,23 @@ def _empty_profile():
     return {"since": _today(), "msgs": 0, "folded": 0, "upto": 0, "portrait": "", "notes": [], "episodes": []}
 
 
+def parse_json(text):
+    """The first {...} in a model's answer as a dict, or None."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 class Memory:
-    def __init__(self, root, llm, names):
-        """llm(messages, max_tokens, temperature) -> str (raises on failure); names: persona id -> 名字."""
+    def __init__(self, root, llm):
+        """llm(messages, max_tokens, temperature) -> str (raises on failure)."""
         self.root = root
         self.llm = llm
-        self.names = names
         os.makedirs(root, exist_ok=True)
         self.locks = {}
         self.busy = set()
@@ -186,7 +204,7 @@ class Memory:
             known += ["%s｜%s" % (x["id"], x["text"]) for x in prof["notes"][:60]] or ["（还没有）"]
             msgs = [{"role": "system", "content": CONSOLIDATE_PROMPT},
                     {"role": "user", "content": "\n".join(known) + "\n\n【这次的聊天】\n" + "\n".join(convo)}]
-            data = self._parse(self.llm(msgs, 700, 0.3))
+            data = parse_json(self.llm(msgs, 700, 0.3))
             if data is None:
                 return None
             pid = new[-1].get("p") if new else None
@@ -214,17 +232,6 @@ class Memory:
             with self.glock:
                 self.busy.discard(uid)
 
-    @staticmethod
-    def _parse(text):
-        m = re.search(r"\{.*\}", text or "", re.S)
-        if not m:
-            return None
-        try:
-            data = json.loads(m.group(0))
-        except ValueError:
-            return None
-        return data if isinstance(data, dict) else None
-
     # ---------------------------------------------------------------- reading
     @staticmethod
     def level(prof):
@@ -240,14 +247,16 @@ class Memory:
                 "notes": [{"id": x["id"], "text": x["text"], "d": x["d"]} for x in prof["notes"]],
                 "episodes": prof["episodes"][-10:]}
 
-    def reply_cap(self, uid):
-        """Most 字 a chat reply may have for this user (see DEPTH)."""
+    def reply_cap(self, uid, pid=None):
+        """Most 字 a chat reply from self `pid` may have for this user (see DEPTH)."""
         with self._lock(uid):
             prof = self._load(uid)
-        return depth(self.level(prof)[0])[1]
+        return depth(self.level(prof)[0], pid)[1]
 
     def _line(self, r, n):
-        who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or self.names.get(r.get("p"), "AI")
+        """One transcript line. The selves' lines are marked as AI context, so their guesses about him are not mistaken
+        for things he said, and never carry a self's name (the selves must not seem to know about each other)."""
+        who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or "AI（只作上下文）"  # no self's name: which self heard it is never shown
         return "%s：%s" % (who, " ".join(str(r.get("text", "")).split())[:n])
 
     def context(self, uid, recent_user_text, pid=None):
@@ -256,14 +265,15 @@ class Memory:
         verbatim, so switching selves never meets a stranger (pid=None adds every unfolded line)."""
         with self._lock(uid):
             prof = self._load(uid)
+            # only his lines (and cards): the other self's replies were being paraphrased, so both sounded the same
             fresh = [r for r in self._read_log(uid, prof["upto"])[0]
-                     if r.get("p") != pid and r.get("role") in ("user", "ai", "card")][-12:]
+                     if r.get("p") != pid and r.get("role") in ("user", "card")][-8:]
         lv, days = self.level(prof)
-        out = ["【你对他的了解】（两个“另一个他”共用；他说过的才算数）",
+        out = ["【你对他的了解】（都是他告诉你的，他说过的才算数；跟他现在说的对不上，就以现在说的为准，不在回复里琢磨、不点破）",
                "认识第 %d 天，他一共说过 %d 句话。" % (days, prof["msgs"])]
         if prof["msgs"] == 0:
             out.append(NEW_USER_LINE)
-        out.append(depth(lv)[2])
+        out.append(depth(lv, pid)[2])
         if prof["portrait"]:
             out.append("他是怎样的人：" + prof["portrait"])
         if prof["notes"]:
@@ -272,16 +282,16 @@ class Memory:
         eps = prof["episodes"]
         if eps:
             out.append("最近几次聊天：")
-            out += ["- %s 跟%s：%s" % (e["d"][5:], self.names.get(e.get("p"), "你们"), e["text"]) for e in eps[-5:]]
+            out += ["- %s：%s" % (e["d"][5:], e["text"]) for e in eps[-5:]]
             older, q = eps[:-5], _bigrams(recent_user_text)
             if older and q:
                 scored = sorted(((len(q & _bigrams(e["text"])), i) for i, e in enumerate(older)), reverse=True)
                 hits = [older[i] for s, i in scored[:3] if s >= 2]
                 if hits:
-                    out.append("可能跟今天有关的往事：")
+                    out.append("可能跟这次有关的往事：")
                     out += ["- %s：%s" % (e["d"], e["text"]) for e in hits]
         if fresh:
-            out.append("他最近跟另一个自己聊的，还没整理进上面（最后一句在 %s）："
+            out.append("他最近还说过这些，还没整理进上面（最后一句在 %s）："
                        % str(fresh[-1].get("t", ""))[5:16].replace("T", " "))
             out += [self._line(r, 150) for r in fresh]
         return "\n".join(out)

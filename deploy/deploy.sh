@@ -24,13 +24,20 @@ SCP_OPTS=(-q -P "$MYLIFE_DEPLOY_PORT" -i "$MYLIFE_DEPLOY_KEY" -o IdentitiesOnly=
 STAGE=/tmp/mylife-deploy
 SERVER_FILES="mylife_server.py memory.py voices.json calibrate.py"
 
-ssh "${SSH_OPTS[@]}" "$HOST" "rm -rf $STAGE && mkdir -p $STAGE"
-scp "${SCP_OPTS[@]}" $(printf 'server/%s ' $SERVER_FILES) \
-  prototype/mylife-prototype.html deploy/nginx-mylife.conf deploy/mylife.service "$HOST:$STAGE/"
+# Pages left open on phones are told about a new deploy through /build.txt (see BUILD in the page).
+BUILD=$(date -u +%Y%m%d-%H%M%S)
+PAGE=$(mktemp)
+trap 'rm -f "$PAGE"' EXIT
+sed "s/^var BUILD='dev';/var BUILD='$BUILD';/" prototype/mylife-prototype.html > "$PAGE"
+grep -q "^var BUILD='$BUILD';" "$PAGE" || { echo "var BUILD='dev'; not found in the page" >&2; exit 1; }
 
-# Persona prompts (档案 + 风格示例) and everything in prompts/ (另一个你, 去AI味, 收尾一句, 彩虹卡).
+ssh "${SSH_OPTS[@]}" "$HOST" "rm -rf $STAGE && mkdir -p $STAGE"
+scp "${SCP_OPTS[@]}" $(printf 'server/%s ' $SERVER_FILES) deploy/nginx-mylife.conf deploy/mylife.service "$HOST:$STAGE/"
+scp "${SCP_OPTS[@]}" "$PAGE" "$HOST:$STAGE/mylife-prototype.html"
+
+# Persona prompts (档案 + 风格示例 + 观点库) and everything in prompts/ (另一个你, 去AI味, 收尾一句, 彩虹卡).
 # The service is restarted below, so the server picks them up (it caches them after the first read).
-tar -czf - personas/*/人格档案.md personas/*/风格示例.md prompts | ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $STAGE/content && tar -xzf - -C $STAGE/content"
+tar -czf - personas/*/人格档案.md personas/*/风格示例.md $(ls personas/*/观点库.json 2>/dev/null) prompts | ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $STAGE/content && tar -xzf - -C $STAGE/content"
 
 if [ "${1:-}" = "--secrets" ]; then
   ssh "${SSH_OPTS[@]}" "$HOST" 'umask 027; cat > /etc/mylife/secrets.env.new && chown root:mylife /etc/mylife/secrets.env.new && chmod 640 /etc/mylife/secrets.env.new && mv /etc/mylife/secrets.env.new /etc/mylife/secrets.env' < .secrets/mylife.env
@@ -42,6 +49,7 @@ rm -rf /opt/mylife/app/personas /opt/mylife/app/prompts
 cp -r $STAGE/content/personas $STAGE/content/prompts /opt/mylife/app/
 chmod -R a+rX /opt/mylife/app/personas /opt/mylife/app/prompts
 install -m 644 $STAGE/mylife-prototype.html /opt/mylife/www/index.html
+echo $BUILD > /opt/mylife/www/build.txt.new && chmod 644 /opt/mylife/www/build.txt.new && mv /opt/mylife/www/build.txt.new /opt/mylife/www/build.txt
 install -m 644 $STAGE/mylife.service /etc/systemd/system/mylife.service
 install -m 644 $STAGE/nginx-mylife.conf /etc/nginx/sites-available/mylife.conf
 ln -sfn /etc/nginx/sites-available/mylife.conf /etc/nginx/sites-enabled/mylife.conf
@@ -62,5 +70,6 @@ systemctl reload nginx
 sleep 1
 systemctl is-active mylife.service
 curl -fsS http://127.0.0.1:18960/api/health; echo
+echo build \$(cat /opt/mylife/www/build.txt)
 rm -rf $STAGE"
 echo "Deployed: https://mylife.instmarket.com.au:1443/"
