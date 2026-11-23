@@ -161,8 +161,8 @@ def replay(args):
     def one(r):
         users = [h.get("content", "") for h in r["hist"][-6:] if h.get("role") == "user"]
         vids = srv.pick_views(r["p"], users, lambda m: srv.complete(m, 20, 0, 8)[0])
-        msgs = srv.build_messages(r["p"], {"nick": r.get("nick") or "朋友", "history": r["hist"]}, r.get("know"),
-                                  srv.views_block(r["p"], vids))
+        req = {"nick": r.get("nick") or "朋友", "history": r["hist"], "profile": r.get("profile"), "birth": r.get("birth")}
+        msgs = srv.build_messages(r["p"], req, r.get("know"), srv.views_block(r["p"], vids))
         text, model = srv.complete(msgs, srv.CHAT_MAX_TOKENS, timeout=40)
         return srv.postprocess(msgs[-1]["content"], srv.fit(text, r.get("cap") or srv.REPLY_MAX))
 

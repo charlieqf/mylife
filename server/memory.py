@@ -29,15 +29,15 @@ NEW_USER_LINE = "（你们刚认识，你还不知道他的任何事：不要提
 # How much to say when he brings something heavy or asks to be talked through it; grows with how well the selves
 # know him. (up to this level, hard cap in 字 that the server trims to, what the prompt asks for)
 DEPTH = ((1, 900, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。但了解得少，不妨碍把他刚说的这件事说透：他带着情绪来、讲一件压着他的事、或要你开导时，就围着他的原话往深里说，先安慰，再分析，再化开，五六小段，六七百字左右，最多八百字。"),
-         (3, 1000, "你对他有些了解了：他带着情绪来、讲一件压着他的事、要你开导时，说五六小段，不超过九百字；能连上他以前说过的就连上。"),
-         (5, 1100, "你已经挺了解他了：他带着情绪来、讲一件压着他的事、要你开导时，可以把话说透，不超过一千字；把这次说的事和他以前说过的事、他的习惯连起来。"))
+         (3, 1000, "你对他有些了解了：他带着情绪来、讲一件压着他的事、要你开导时，说五六小段，不超过九百字；他这次说的明显还是以前那件事，才连上他以前说过的。"),
+         (5, 1100, "你已经挺了解他了：他带着情绪来、讲一件压着他的事、要你开导时，可以把话说透，不超过一千字；说的还是以前那件事时，可以连上他以前说过的、他的习惯。"))
 
 
 # 伙伴 (pingzuo) sits with him rather than taking the thing apart: a little shorter than 导师 at every level.
 # The client wants long, comforting replies "most of the time", so even a new user gets the full length; knowing him adds a little.
 DEPTH_PINGZUO = ((1, 680, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说四五段，四五百字，最多六百字。"),
-                 (3, 780, "你对他有些了解了：他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说四五段，不超过七百字；能想起他以前说过的就轻轻提一句。"),
-                 (5, 880, "你已经挺了解他了：他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说，不超过八百字；可以想起他以前扛过的事、他的习惯。"))
+                 (3, 780, "你对他有些了解了：他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说四五段，不超过七百字；说的还是以前那件事，才轻轻提一句他以前说过的。"),
+                 (5, 880, "你已经挺了解他了：他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说，不超过八百字；说的还是以前那件事时，可以想起他以前扛过的、他的习惯。"))
 
 
 def depth(lv, pid=None):
@@ -260,18 +260,30 @@ class Memory:
         who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or "AI（只作上下文）"  # no self's name: which self heard it is never shown
         return "%s：%s" % (who, " ".join(str(r.get("text", "")).split())[:n])
 
-    def context(self, uid, recent_user_text, pid=None):
+    def just_said(self, uid, minutes=60):
+        """His lines (to either self, folded or not) from the last `minutes`, oldest first, at most 6."""
+        since = (datetime.datetime.now() - datetime.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+        with self._lock(uid):
+            recs = self._read_log(uid, -40)[0]
+        return [str(r.get("text", "")) for r in recs if r.get("role") == "user" and str(r.get("t", "")) >= since][-6:]
+
+    def context(self, uid, recent_user_text, pid=None, brief=False):
         """The block that goes into the system prompt: who this person is, as far as the selves know. Both selves
         share it; `pid` is the one he is talking to, and what he said to the other one since the last fold is added
-        verbatim, so switching selves never meets a stranger (pid=None adds every unfolded line)."""
+        verbatim, so switching selves never meets a stranger (pid=None adds every unfolded line). brief: only how long
+        they have known each other, for talk that shouldn't be pulled back to his old topics (star signs and the like)."""
         with self._lock(uid):
             prof = self._load(uid)
             # only his lines (and cards): the other self's replies were being paraphrased, so both sounded the same
             fresh = [r for r in self._read_log(uid, prof["upto"])[0]
                      if r.get("p") != pid and r.get("role") in ("user", "card")][-8:]
         lv, days = self.level(prof)
-        out = ["【你对他的了解】（都是他告诉你的，他说过的才算数；跟他现在说的对不上，就以现在说的为准，不在回复里琢磨、不点破）",
+        out = ["【你对他的了解】（都是他告诉你的，他说过的才算数；跟他现在说的对不上，就以现在说的为准，不在回复里琢磨、不点破）"
+               "这些是让你懂他的，不是每次都要提：他说起新的事、换了话题，就聊他现在说的，不把以前的事扯进来；"
+               "他自己提起以前的事，或者说的明显还是同一件，才接上。",
                "认识第 %d 天，他一共说过 %d 句话。" % (days, prof["msgs"])]
+        if brief:
+            return "\n".join(out)
         if prof["msgs"] == 0:
             out.append(NEW_USER_LINE)
         out.append(depth(lv, pid)[2])

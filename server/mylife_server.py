@@ -6,7 +6,8 @@ Secrets come from the environment (systemd EnvironmentFile=/etc/mylife/secrets.e
 
 Endpoints
   GET  /api/health | /api/voices | /api/cards | /api/persona?p= | /api/self?u=
-  POST /api/chat     {p, u, nick, profile, notme, history}   -> {reply, model, ms, tid}
+  POST /api/chat     {p, u, nick, profile, notme, birth, history} -> {reply, model, ms, tid}
+  POST /api/chart    {date, time, slot, city}                 -> 排盘（八字、紫微、星盘，server/paipan.py）：{items, animal, text, ...}
   POST /api/card     {p, u, id}                               -> {ok}   今天抽到的彩虹卡记进长期记忆（卡由页面念，不接话）
   POST /api/open     {p, u, nick}                             -> {text, model, ms, tid}   进对话时先开口（两个人格记忆共享）
   POST /api/closing  {p, u, nick, history}                    -> {text, model, ms, tid}   收尾一句
@@ -42,6 +43,7 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import paipan
 from memory import NEW_USER_LINE, Memory, parse_json, valid_uid, write_json_atomic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -308,12 +310,33 @@ def untime(reply, recent):
     return TIME_ADV.sub(lambda m: m.group(0) if m.group(1) in recent else "", reply)
 
 
-def postprocess(user_text, reply, recent=None, told=False):
+def drop_sentences(reply, pattern):
+    """The reply without the sentences that match `pattern` (kept whole if nothing would be left)."""
+    paras = [re.sub(r"[^。！？\n]*(?:%s)[^。！？\n]*[。！？]?" % pattern, "", p).strip() for p in reply.split("\n")]
+    return "\n\n".join(p for p in paras if p) or reply
+
+
+# The selves don't know each other exists (user 2026-11-23, again 2026-11-24 on old logs: "你跟黄执中说的那件事",
+# "伙伴更合适"). The prompts never name the other one; this is the net under them: a sentence naming the other self, or
+# the people they are styled on (the test code names before 2026-11-22), never reaches him. A name he used himself
+# (his own 导师, 合作伙伴) is his word, not the other self.
+REAL_NAMES = "黄执中|大麦哥"
+OTHER_NAMES = {"bange": ("平坐", r"(?<![合作小好老])伙伴"), "pingzuo": ("半格", "导师")}
+
+
+def drop_other_self(pid, reply, said=""):
+    names = [REAL_NAMES] + [n for n in OTHER_NAMES.get(pid, ()) if not re.search(n, said or "")]
+    return drop_sentences(reply, "|".join(names)) if re.search("|".join(names), reply) else reply
+
+
+def postprocess(user_text, reply, recent=None, told=False, pid=None):
     """recent = his last few lines (chat only). When none of them is an explicit wish to die, sentences that bring up the
     hotline or self-harm are dropped. When his line is one, one soft line is added, once per chat (told = said before).
-    With recent, stock time words he didn't use are taken out (see untime)."""
+    With recent, stock time words he didn't use are taken out (see untime). With pid, sentences naming the other self go."""
     if recent is not None:
         reply = untime(reply, recent)
+    if pid:
+        reply = drop_other_self(pid, reply, (user_text or "") + (recent or ""))
     reply = drop_asides(reply.strip())
     if len(reply) > 1 and reply[0] in "“\"" and reply[-1] in "”\"" and not re.search("[“”\"]", reply[1:-1]):
         reply = reply[1:-1].strip()  # the model wrapped the whole reply in quotes; a quote that opens a sentence stays
@@ -322,8 +345,7 @@ def postprocess(user_text, reply, recent=None, told=False):
         if not told and "12356" not in reply:
             reply += "\n\n" + SAFETY_LINE
     elif recent is not None and not CRISIS.search(recent) and AT_RISK.search(reply):
-        paras = [re.sub(r"[^。！？\n]*(?:%s)[^。！？\n]*[。！？]?" % AT_RISK.pattern, "", p).strip() for p in reply.split("\n")]
-        reply = "\n\n".join(p for p in paras if p) or reply
+        reply = drop_sentences(reply, AT_RISK.pattern)
     return reply
 
 
@@ -444,11 +466,76 @@ ROUTE_PROMPT = ("下面是一些话题（括号里是这类话常见的说法）
                 "只输出编号，用逗号隔开。宁少勿多：只是沾到一个词、其实不是一回事的不选；都贴不上，就只输出：无\n\n%s")
 
 
+# 星座、血型、紫微、八字、占星 (client 2026-11-24: "当用户提出要聊这些的时候，就专心聊这些"). The selves used to turn
+# these down ("这个我看不了") and steer him back to his feelings ("你问这个，多半不是真想知道……").
+_SIGN = "白羊|金牛|双子|巨蟹|狮子|处女|天秤|天平|天蝎|射手|人马|摩羯|水瓶|双鱼"
+ASTRO = re.compile(r"星座|星盘|水逆|合盘|占星|宫位|十二宫|血型|(?:AB|[ABO])型|紫微|紫薇|斗数|命宫|主星|八字|日主|四柱|命盘|排盘|命理"
+                   r"|五行|算命|本命年|太岁|生肖|属相|属(?:鼠|牛|虎|兔|龙|蛇|马|羊|猴|鸡|狗|猪)"
+                   r"|白羊|金牛|巨蟹|天秤|天蝎|摩羯|水瓶|双鱼|(?:%s)座"  # 狮子、处女、双子、射手 alone mean other things
+                   r"|(?:太阳|月亮|上升|金星|火星|水星)(?:星座|在|落|是)?(?:%s)" % (_SIGN, _SIGN)
+                   + r"|(?:月亮|上升)(?:和|跟|与|、)?(?:上升|月亮|太阳)|(?:月亮|上升)(?:星座)?(?:是|在)(?:什么|啥|哪)"
+                   r"|运势|大运|流年|身宫|四化|化[禄权科忌]|十神|喜用|用神|纳音|日元"
+                   r"|第?[一二三四五六七八九十]{1,2}宫(?![殿廷])|在(?:几|哪个?|哪一)宫")
+
+
+CHART_PARTS = {
+    "bazi": re.compile(r"八字|日主|日元|五行|四柱|十神|喜用|用神|纳音|天干|地支|生肖|属相|本命年|太岁|大运|流年"
+                       r"|属(?:鼠|牛|虎|兔|龙|蛇|马|羊|猴|鸡|狗|猪)"),
+    "ziwei": re.compile(r"紫微|紫薇|斗数|命宫|身宫|主星|四化|化[禄权科忌]"),
+    "west": re.compile(r"星座|星盘|占星|上升|月亮|太阳|[水金火木土]星|水逆|合盘|宫位|第?[一二三四五六七八九十]{1,2}宫|在(?:几|哪个?|哪一)宫"
+                       r"|" + _SIGN)}
+
+
+def chart_parts(said):
+    """Which of his charts he is asking about; all three for 排盘, 算命, 命理 and the like."""
+    return [k for k, p in CHART_PARTS.items() if p.search(said)] or list(CHART_PARTS)
+
+
+def birth_chart(birth):
+    """The page's birth fields {date, time, slot, city} -> paipan.chart (cached), or None when there is no usable date."""
+    if not isinstance(birth, dict) or not birth.get("date"):
+        return None
+    try:
+        return paipan.chart(str(birth["date"])[:10], clip(birth.get("time"), 5), clip(birth.get("slot"), 4),
+                            clip(birth.get("city"), 40))
+    except ValueError:
+        return None
+
+
+ASTRO_NOTE = ("他在聊星座、血型、紫微、八字、占星这一类：专心陪他聊这个，照【他想聊星座、八字这些】来，"
+              "不猜他为什么问，不把话拉回他的心事，也不扯这次前面聊过的别的事、以前说过的事（他自己连上的除外）。"
+              "他让你剖析、讲讲，就说透，三四段；随口一问，几句就行。")
+
+
+ASTRO_MORE = re.compile(r"呢|吗|继续|还有|然后|再说|多说|展开|细说|具体|准|像|哈")
+
+
+def astro_turn(users):
+    """He is on astrology and the like: his last line says so, or it is a short follow-up ("那双鱼呢", "准吗") to one
+    that did ("我妈住院了" after one is not)."""
+    return bool(users) and (bool(ASTRO.search(users[-1])) or (len(users) > 1 and len(users[-1]) <= 12 and
+                                                             bool(ASTRO_MORE.search(users[-1]) and ASTRO.search(users[-2]))))
+
+
+def astro_run(hist):
+    """The tail of the history that is about star signs and the like (short lines such as "准吗" "嗯" go with it). Even
+    told not to, the selves read whatever he said just before into his chart ("回到家喂完猫……这就是月亮双鱼")."""
+    start = len(hist)
+    for i in range(len(hist) - 1, -1, -1):
+        said = str(hist[i].get("content") or "")
+        if hist[i].get("role") == "user":
+            if not (ASTRO.search(said) or len(said) <= 12):
+                break
+            start = i
+    return hist[start:]
+
+
 def pick_views(pid, users, ask):
     """Up to two topic ids for what he is talking about (a short model call: ask(msgs) -> text). Skipped for one-liners
-    like "嗯" or "好累", and when the persona has no library."""
+    like "嗯" or "好累", when the persona has no library, and when he is on astrology (the cards are about feelings and
+    pulled him back to them)."""
     lib = view_library(pid)
-    if not lib or not users or len(users[-1]) < 6:
+    if not lib or not users or len(users[-1]) < 6 or astro_turn(users):
         return []
     topics = "\n".join("%s %s（%s）" % (i, t["topic"], "、".join(t["triggers"][:5])) for i, t in lib.items())
     try:
@@ -501,20 +588,31 @@ def build_messages(pid, req, know=None, views=""):
     ctx = [user_block(req)]
     prof = clip(req.get("profile"), 800)
     if prof:
-        ctx.append("性格画像（只当线索，不当结论；不要逐条复述，也不要主动提星座、MBTI 这些词，除非对方先提）：\n" + prof)
+        ctx.append("性格画像（他填的资料推出来的，只当线索，不当结论；不是他跟你说过的话，别说成“你提过”“你说过”；"
+                   "不要逐条复述，也不要主动提星座、MBTI 这些词，除非对方先提）：\n" + prof)
     notme = clip(req.get("notme"), 200)
     if notme:
         ctx.append("用户标了“不像我”的画像条目（不要再拿这些说事）：" + notme)
     ctx.append(know or NEW_USER_LINE)
+    hist = req.get("history") or []
+    last_ai = next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
+    astro = astro_turn([str(h.get("content") or "") for h in hist if h.get("role") == "user"][-2:])
+    if astro:
+        hist = astro_run(hist)
+    chart = birth_chart(req.get("birth")) if astro else None
+    if chart:  # only while he is on it (otherwise it creeps into everything), and only the systems he is asking about
+        said = " ".join(str(h.get("content") or "") for h in hist if h.get("role") == "user")
+        ctx.append(paipan.chart_text(chart, chart_parts(said)))
     if views:
         ctx.append(views)
     # The selves don't know about each other (user 2026-11-23): no name of, or referral to, the other one.
     now = "【此刻】日期 %s（你心里有数就行，回复里不说今天、今晚这类时间词）。" % datetime.date.today().isoformat()
-    hist = req.get("history") or []
-    last_ai = next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
+    if astro:
+        now += ASTRO_NOTE
     if pid == "pingzuo":  # 客户：“说长一点，帮我分析化解情绪”；伙伴的档案处处说慢、说短，这里再把长度提一次
-        now += ("这一条不提问，不用问号。他要是带着情绪、讲了一件压着他的事，就说长一点，说够四五段、每段三四句："
-                "先陪着，再把他这股情绪理一理，再帮他化开一点；他只是随口一句，就短短地回。")
+        now += "这一条不提问，不用问号。" + ("" if astro else
+               "他要是带着情绪、讲了一件压着他的事，就说长一点，说够四五段、每段三四句："
+               "先陪着，再把他这股情绪理一理，再帮他化开一点；他只是随口一句，就短短地回。")
     elif "？" in last_ai or "?" in last_ai:  # users: "我说一句问我一句，更累了"
         said = str(hist[-1].get("content") or "").strip() if hist else ""
         now += ("他只回了“%s”，是在答你上一条的问题，不想被接着追问。" % said if len(said) <= 10 else "你上一条问过他了，他也答了。") \
@@ -634,22 +732,33 @@ def tidy_closing(text):
     return text
 
 
-OPENING_TASK = ("【现在】他刚打开和你（%s）的对话，还没说话。你先开口：一到两句，不超过五十个字。"
-                "“你对他的了解”里有他最近说的事，就自然接上：直接说那件事，或者说你一直惦着它，不用每次都从“上回你说”起头，"
-                "%s；那里什么都没有，就简单打个招呼。不说“我看了记录”，不复述一大段，不提你记得多少。")
-# 伙伴 doesn't ask (users said being asked every line made them more tired). Its line after the pick-up used to be one
-# fixed wish ("想说就说、说一半也行"), so every opening ended the same way (client chat 2026-11-23: six times in a day).
-# One of these at random, as gist, not wording.
-OPENING_END = {"bange": ["可以再问一个好回答的小问题"],
-               "pingzuo": ["再用一句话让他知道不用急着开口", "再用一句话让他知道怎么说都行，说乱了也不要紧",
-                           "再用一句话让他知道不想说也可以就待一会儿", "再用一句话让他知道你在这儿陪着"]}
-OPENING_NOTE = {"pingzuo": "，用你自己的话，不说“说一半也行”，不提问，不用问号"}
+# Opening line. Client 2026-11-24: "为什么一直要结合昨天的问题来聊，要怎么开始新话题", "老是在说昨天的事" — 42 of 47
+# openings had started from an old topic ("上回你说……，我一直记着"). Now only what he said in the last hour (to either
+# self: he switched mid-talk) is picked up; any later visit is a plain hello that leaves the topic to him, and the
+# memory only shows when he brings something up.
+OPENING_CONT = ("【现在】他刚才还在说话，现在打开了和你（%s）的对话，还没开口。他刚才说的（就当是刚刚跟你说的）：\n%s\n"
+                "你先开口：一到两句，不超过四十个字。接着他刚才说的最后那件事说一句，让他知道你听见了；%s。"
+                "不说“上回”“我一直记着”，不说这话是他跟谁说的，不复述一大段。")
+OPENING_FRESH = ("【现在】他又来了，打开了和你（%s）的对话，还没开口。你先开口：一两句，不超过三十个字，像又见到他时打个招呼。"
+                 "这一句不提以前聊过的任何事（不说上回、上次、那件事、一直记着、好点没），也不猜他今天怎么了，把话头留给他：%s。")
+# 伙伴 doesn't ask (users said being asked every line made them more tired), and one fixed wish ended every opening the
+# same way (client chat 2026-11-23: "说一半也行" six times in a day): one gist at random, not wording.
+OPENING_END = {"bange": {"cont": ["也让他知道想换个别的说也行"],
+                         "fresh": ["可以问一个好回答的小问题，问他此刻，不问以前的事", "让他知道想聊什么都行，新的事、随便什么都可以"]},
+               "pingzuo": {"cont": ["再让他知道接着说这个、想说点别的都行"],
+                           "fresh": ["让他知道想聊什么都行，大事小事、新的事都可以", "让他知道不用急着开口",
+                                     "让他知道不想说也可以就待一会儿", "让他知道你在这儿"]}}
+OPENING_NOTE = {"pingzuo": "，用你自己的话，不说“说一半也行”，别总拿“嗯，我在”“想说什么都行”起头，不提问，不用问号"}
 
 
-def build_opening(pid, req, know=None):
-    """开场一句: persona + who the user is + what the selves know (shared) + task."""
-    end = random.choice(OPENING_END[pid]) + OPENING_NOTE.get(pid, "")
-    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, OPENING_TASK % (PERSONAS[pid][0], end))
+def build_opening(pid, req, know=None, just=None):
+    """开场一句: persona + who the user is + task. just = his lines from the last hour (pick that up); otherwise a fresh
+    hello, and `know` only says how long they have known each other (the old topics stay out of it)."""
+    kind = "cont" if just else "fresh"
+    end = random.choice(OPENING_END[pid][kind]) + OPENING_NOTE.get(pid, "")
+    task = (OPENING_CONT % (PERSONAS[pid][0], "\n".join("他：" + clip(t, 150) for t in just), end) if just
+            else OPENING_FRESH % (PERSONAS[pid][0], end))
+    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, task)
     return [{"role": "system", "content": system}, {"role": "user", "content": "（他打开了和你的对话）"}]
 
 
@@ -719,17 +828,18 @@ class App:
     def chat(self, pid, req, who):
         uid = req.get("u") if valid_uid(req.get("u")) else None
         users = [clip(h.get("content"), 300) for h in (req.get("history") or [])[-6:] if h.get("role") == "user"]
-        know = self.mem.context(uid, " ".join(users[-3:]), pid) if uid else None
+        know = self.mem.context(uid, " ".join(users[-3:]), pid, brief=astro_turn(users)) if uid else None
         vids = pick_views(pid, users, lambda m: self.llm(m, max_tokens=20, temperature=0, timeout=8)[0])
         msgs = build_messages(pid, req, know, views_block(pid, vids))
         raw, model, ms = self.llm(msgs, max_tokens=CHAT_MAX_TOKENS, timeout=40)
         cap = self.mem.reply_cap(uid, pid) if uid else REPLY_MAX
         fitted = fit(raw, cap)
         told = any("12356" in str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") != "user")
-        reply = postprocess(msgs[-1]["content"], fitted, " ".join(users), told)
+        reply = postprocess(msgs[-1]["content"], fitted, " ".join(users), told, pid)
         tid = self.log("chat", who, pid, req, user=msgs[-1]["content"], reply=reply, raw=raw if fitted != raw else None,
                        cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, views=vids or None,
-                       hist=req.get("history"))
+                       hist=req.get("history"), profile=clip(req.get("profile"), 800) or None,
+                       birth=req.get("birth") if isinstance(req.get("birth"), dict) else None)
         if uid and self.mem.append(uid, pid, [("user", clip(msgs[-1]["content"], 1000)), ("ai", reply)]) >= 8:
             self.fold_pool.submit(self.fold, uid, 8)
         return {"reply": reply, "model": model, "ms": ms, "tid": tid}
@@ -738,7 +848,7 @@ class App:
         """One sentence that sums up the session, said when the user taps 结束本次对话."""
         msgs, said = build_closing(pid, req)
         text, model, ms = self.llm(msgs, max_tokens=120, temperature=0.7, tidy=tidy_closing)
-        text = postprocess("", text)  # the closing line never carries the hotline
+        text = postprocess("", text, pid=pid)  # the closing line never carries the hotline
         tid = self.log("closing", who, pid, req, user=said, reply=text, model=model, ms=ms, pv=prompt_version(pid))
         if valid_uid(req.get("u")):
             self.mem.append(req["u"], pid, [("closing", text)])
@@ -746,13 +856,16 @@ class App:
         return {"text": text, "model": model, "ms": ms, "tid": tid}
 
     def opening(self, pid, req, who):
-        """First line when he opens a chat after a while or after talking to the other self: memory is shared, so the
-        self he opens picks up what either of them heard last."""
+        """First line when he opens a chat after a while or after talking to the other self: what he said in the last
+        hour (to either self) is picked up, anything older waits until he brings it up (see OPENING_FRESH)."""
         uid = req.get("u") if valid_uid(req.get("u")) else None
-        know = self.mem.context(uid, "", pid) if uid else None
-        text, model, ms = self.llm(build_opening(pid, req, know), max_tokens=120)
-        text = postprocess("", fit(text, 80))
-        tid = self.log("open", who, pid, req, reply=text, model=model, ms=ms, pv=prompt_version(pid), know=know)
+        just = self.mem.just_said(uid) if uid else []
+        s = self.mem.summary(uid) if uid else None
+        know = "【你对他的了解】认识第 %d 天，他跟你说过 %d 句话。" % (s["days"], s["msgs"]) if s and s["msgs"] else None
+        text, model, ms = self.llm(build_opening(pid, req, know, just), max_tokens=120)
+        text = postprocess("", drop_other_self(pid, fit(text, 80), " ".join(just)))
+        tid = self.log("open", who, pid, req, reply=text, model=model, ms=ms, pv=prompt_version(pid), know=know,
+                       just=just or None)
         return {"text": text, "model": model, "ms": ms, "tid": tid}
 
     def portrait(self, req, who):
@@ -921,10 +1034,22 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/sync": self.handle_self, "/api/card": self.handle_self, "/api/self/forget": self.handle_self,
                    "/api/self/wipe": self.handle_self, "/api/self/import": self.handle_self,
                    "/api/fb": self.handle_fb, "/api/event": self.handle_fb, "/api/asr": self.handle_asr,
-                   "/api/tts": self.handle_tts, "/api/portrait": self.handle_portrait}.get(path)
+                   "/api/tts": self.handle_tts, "/api/portrait": self.handle_portrait,
+                   "/api/chart": self.handle_chart}.get(path)
         if not handler:
             return self.send_json(404, {"error": "not found"})
         return handler(path)
+
+    def handle_chart(self, path):
+        """排盘 for the portrait page: arithmetic only, no model call."""
+        try:
+            req = self.read_json(2000)
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        if self.limited("fb"):
+            return None
+        chart = birth_chart(req)
+        return self.send_json(200, chart) if chart else self.send_json(400, {"error": "need a birth date"})
 
     def handle_portrait(self, path):
         try:

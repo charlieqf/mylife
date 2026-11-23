@@ -481,7 +481,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
       <div class="slots" id="slots">记不清？选个大概：</div>
 
       <label class="label" for="f-city">出生城市 <em>用于占星和八字的时间校正</em></label>
-      <input class="field" id="f-city" placeholder="如 杭州" autocomplete="off" enterkeyhint="done">
+      <input class="field" id="f-city" placeholder="如 杭州、浙江湖州、悉尼" autocomplete="off" enterkeyhint="done">
 
       <label class="label" for="f-mbti">MBTI</label>
       <select class="field" id="f-mbti"></select>
@@ -751,10 +751,10 @@ function named(s){return ALIAS.bange?String(s).replace(/半格/g,ALIAS.bange).re
 var P={
   bange:{id:'bange',name:ALIAS.bange||'半格',kind:'理性',cls:'b',tg:'o',color:'var(--b)',sub:'另一个你 · 多看半步的那个',
     pitch:'更清醒的那个你。想把一件事想清楚时找它，它会追问你，不顺着你说。',
-    sug:['我在纠结要不要辞职','帮我理一理','你说得不对','我只想说说','你是谁？']},
+    sug:['我在纠结要不要辞职','帮我理一理','你说得不对','我只想说说','聊聊我的星座','你是谁？']},
   pingzuo:{id:'pingzuo',name:ALIAS.pingzuo||'平坐',kind:'陪伴',cls:'p',tg:'g',color:'var(--p)',sub:'另一个你 · 陪你坐着的那个',
     pitch:'更温柔的那个你。不想被分析时找它，它陪你坐着，不急着让你好起来。',
-    sug:['我连难过都觉得累','说不上来，就是闷','其实我不是生气，是失望','有句话我一直在心里回放','我还在想他','……']}  // 情绪句子块：点一下就交出心里那句（客户《引导提问》第三层）；“……”是什么都不想说
+    sug:['我连难过都觉得累','说不上来，就是闷','其实我不是生气，是失望','有句话我一直在心里回放','我还在想他','想聊聊星座','……']}  // 情绪句子块：点一下就交出心里那句（客户《引导提问》第三层）；“……”是什么都不想说
 };
 var PERSONA_TEXT={
  bange:'人格档案在服务器上：personas/bange/人格档案.md 与 prompts/self-frame.txt（连上服务器后这里显示全文）。',
@@ -977,20 +977,21 @@ function analyze(){
   var p=S.profile,items=[],kw=[],parts=[];
   var y,m,d,sign=null;
   if(p.date){var a=p.date.split('-');y=+a[0];m=+a[1];d=+a[2];sign=zodiac(m,d)}
-  var hasTime=!!(p.time||p.slot),hasCity=!!p.city;
+  var hasTime=!!(p.time||p.slot),hasCity=!!p.city,C=chartNow();
+  function fromChart(k){var it=C.items[k];return {key:k,label:it.label,text:it.text,miss:!!it.miss}}
   // 星座
   if(sign){var el=ELEM[sign];items.push({key:'sign',label:'星座 · '+sign+'座',text:ELEM_TXT[el]});kw.push({'火':'直接','土':'稳','风':'好奇','水':'敏感'}[el])}
   else items.push({key:'sign',label:'星座',text:'没填生日，暂不计算。',miss:true});
-  // 占星
-  if(sign&&hasTime&&hasCity)items.push({key:'astro',label:'占星 · 上升与月亮',text:'月亮星座决定你私下的情绪底色，上升星座是别人对你的第一印象。正式版由排盘程序按出生时间和城市计算。',sample:true});
-  else items.push({key:'astro',label:'占星 · 上升与月亮',text:'需要生日、出生时间和出生城市。',miss:true});
-  // 紫微
-  if(y&&hasTime)items.push({key:'ziwei',label:'紫微斗数 · 命宫',text:'命宫主星描述你做事的底层方式，比如是“先谋后动”还是“边走边看”。正式版由排盘程序计算。',sample:true});
-  else items.push({key:'ziwei',label:'紫微斗数 · 命宫',text:'需要生日和出生时间。',miss:true});
-  // 八字
-  var animal=y?ANIMAL[((y-1900)%12+12)%12]:null;
-  if(y){items.push({key:'bazi',label:'八字 · 日主与五行 · 生肖'+animal,text:(hasTime?'日主和五行强弱描述你的“底色”，比如偏刚还是偏柔。正式版由排盘程序计算，并按出生城市做真太阳时校正。':'有生日但缺出生时间，只能排出年、月、日三柱。正式版由排盘程序计算。')+'（生肖按公历年粗算，正式版以立春划分。）',sample:true})}
-  else items.push({key:'bazi',label:'八字 · 日主与五行',text:'需要生日，最好有出生时间。',miss:true});
+  // 占星、紫微、八字：服务器排好的盘（见 loadChart）。还没排到（连不上服务器、刚改了资料）时先放说明文字，生肖按 2 月 4 日立春估
+  var ay=y&&(m<2||(m===2&&d<4))?y-1:y,animal=C?C.animal:y?ANIMAL[((ay-1900)%12+12)%12]:null;
+  if(C)items.push(fromChart('astro'),fromChart('ziwei'),fromChart('bazi'));
+  else items.push(
+    sign&&hasTime&&hasCity?{key:'astro',label:'占星 · 上升与月亮',text:'月亮星座决定你私下的情绪底色，上升星座是别人对你的第一印象。',sample:true}
+      :{key:'astro',label:'占星 · 上升与月亮',text:'需要生日、出生时间和出生城市。',miss:true},
+    y&&hasTime?{key:'ziwei',label:'紫微斗数 · 命宫',text:'命宫主星描述你做事的底层方式，比如是“先谋后动”还是“边走边看”。',sample:true}
+      :{key:'ziwei',label:'紫微斗数 · 命宫',text:'需要生日和出生时间。',miss:true},
+    y?{key:'bazi',label:'八字 · 日主与五行 · 生肖'+animal,text:'日主和五行强弱描述你的“底色”，比如偏刚还是偏柔。',sample:true}
+      :{key:'bazi',label:'八字 · 日主与五行',text:'需要生日，最好有出生时间。',miss:true});
   // MBTI
   if(p.mbti){items.push({key:'mbti',label:'MBTI · '+p.mbti,text:MBTI[p.mbti]});
     var c=p.mbti.split('');kw.push(c[0]==='I'?'先想后说':'边说边想');kw.push(c[2]==='T'?'讲道理':'重感受');kw.push(c[3]==='J'?'要确定':'留余地')}
@@ -1116,6 +1117,20 @@ $('#btn-skip').addEventListener('click',function(){S.profile={};store.set('profi
 /* 画像展开（用户：“这还是有点准，可以拓展下分析星座 MBTI 这些吗”）：服务器按他填的星座、MBTI 各写几面，再把几样放在一起看；
    跟两个自己聊过以后，另写一段“从你说过的话看”。按资料和它们对他的了解程度缓存在本机，资料改了、更了解他了再重写 */
 var PTX={sig:'',p:null,data:null};
+/* 排盘（八字、紫微、星盘）：服务器按生日、出生时间、出生城市算，存在本机；资料改了再排。聊天时只带出生信息，服务器在他聊星座、八字时自己排 */
+var CH={sig:'',p:null,data:store.get('chart',null)};
+function birthOf(){var p=S.profile||{};return p.date?{date:p.date,time:p.time||'',slot:p.time?'':(p.slot||''),city:p.city||''}:null}
+function chartNow(){var b=birthOf();return b&&CH.data&&CH.data.sig===JSON.stringify(b)?CH.data:null}
+function loadChart(){
+  var b=birthOf(),sig=b?JSON.stringify(b):'';
+  if(!b||!CHAT.ok||chartNow())return Promise.resolve();
+  if(CH.p&&CH.sig===sig)return CH.p;
+  CH.sig=sig;
+  return CH.p=postJSON('/api/chart',b,10000)
+    .then(function(d){if(CH.sig===sig){d.sig=sig;CH.data=d;store.set('chart',d)}})
+    .catch(function(){})  // 没排成：画像先放说明文字，下次打开再排
+    .then(function(){if(CH.sig===sig)CH.p=null});
+}
 function loadPortraitMore(){
   var A=analyze(),sig=[A.sign,A.mbti,(S.profile||{}).blood,A.animal,Math.ceil(((S.self||{}).n||0)/5)].join('|');  // 记住的事每多 5 条重写一次
   if(!CHAT.ok||!(A.sign||A.mbti)||(PTX.sig===sig&&(PTX.data||PTX.p)))return;
@@ -1129,6 +1144,8 @@ function loadPortraitMore(){
 }
 async function showPortrait(fresh){
   loadPortraitMore();refreshSelf().then(loadPortraitMore);  // 聊过以后记住的事多了：等拿到最新的再看要不要重写
+  var chartP=loadChart();
+  if(!fresh)chartP.then(function(){if($('#s-portrait').classList.contains('on'))renderPortrait()});
   stack=fresh?['portrait']:stack;show('portrait',!fresh);
   $('#pt-bar').style.display=fresh?'none':'flex';
   $('#pt-foot').style.display=fresh?'block':'none';
@@ -1139,7 +1156,7 @@ async function showPortrait(fresh){
     body.innerHTML='<div class="steps"><h3>正在了解你…</h3>'+steps.map(function(s){return '<div class="step"><i></i>'+esc(s)+'</div>'}).join('')+'</div>';
     var els=body.querySelectorAll('.step');
     for(var i=0;i<els.length;i++){els[i].classList.add('on');await sleep(260);els[i].classList.add('done');els[i].querySelector('i').textContent='✓'}
-    await sleep(300);
+    await Promise.all([sleep(300),Promise.race([chartP,sleep(4000)])]);
     $('#pt-foot').style.visibility='visible';
   }
   renderPortrait();
@@ -1563,6 +1580,7 @@ function chatContext(){
   if(p.mbti&&S.pfb.mbti!==-1)lines.push('MBTI：'+p.mbti+'，'+MBTI[p.mbti]);
   if(A.sign&&S.pfb.sign!==-1)lines.push('星座：'+A.sign+'座，'+ELEM_TXT[ELEM[A.sign]]);
   if(p.blood&&S.pfb.blood!==-1)lines.push('血型：'+p.blood+' 型');
+  if(A.animal&&S.pfb.bazi!==-1)lines.push('生肖：属'+A.animal);
   if(lines.length)lines.push('综合：'+A.summary);
   A.items.forEach(function(it){if(S.pfb[it.key]===-1)neg.push(it.label)});
   return {nick:S.user?S.user.nick:'',profile:lines.join('\n'),notme:neg.join('、')};
@@ -1585,7 +1603,7 @@ function postJSON(url,body,ms){
 }
 async function replyLLM(){
   var who=S.cur,ctx=chatContext(),ty=typing(),d;
-  try{d=await postJSON('/api/chat',{u:S.uid,p:who,nick:ctx.nick,profile:ctx.profile,notme:ctx.notme,history:chatHistory(S.logs[who])},45000)}
+  try{d=await postJSON('/api/chat',{u:S.uid,p:who,nick:ctx.nick,profile:ctx.profile,notme:ctx.notme,birth:birthOf(),history:chatHistory(sessionMsgs(who))},45000)}
   catch(e){ty.remove();return false}
   ty.remove();
   if(!d||!d.reply)return false;
@@ -1852,7 +1870,9 @@ $('#menu-items').addEventListener('click',function(e){
   nav(g);
 });
 /* 结束本次对话：人格先用一句话把这次聊的收住（句式从高赞回复里提炼，见 prompts/closing-style.txt），再弹评分 */
-function sessionMsgs(id){var l=S.logs[id],i=l.length;while(i>0&&l[i-1].role!=='divider')i--;return l.slice(i)}
+// 这一次来聊的：从上一次“结束本次对话”或隔了两个多小时以后算起。发给模型的历史只有这些（客户：“老是在说昨天的事”），
+// 更早的在长期记忆里，他提起了才用；快捷话题也按这一次算，隔天再来又会出来。两小时和进对话时“先开口”的界线一样
+function sessionMsgs(id){var l=S.logs[id],i=l.length;while(i>0&&l[i-1].role!=='divider'&&((i<l.length?l[i].t:Date.now())-(l[i-1].t||0))<2*3600e3)i--;return l.slice(i)}
 async function endTalk(){
   if(S.busy)return;
   var id=S.cur,sess=sessionMsgs(id),said=sess.filter(function(m){return m.role==='user'}).length;
@@ -2021,7 +2041,7 @@ var BUILD='dev';
 /* ================= 启动 ================= */
 // 外层框不允许被滚动（键盘弹出、自动滚动到焦点时会把藏在框外的弹层带出来）；不支持 overflow:clip 的浏览器靠这里归零
 (function(){var A=$('#app');A.addEventListener('scroll',function(){if(A.scrollTop||A.scrollLeft){A.scrollTop=0;A.scrollLeft=0}})})();
-loadCloud();
+loadCloud();loadChart();  // 老用户（排盘上线前填的资料）也排一次：生肖按立春算准
 $('#login-stage').innerHTML=sceneSVG('home');
 if(!S.user){stack=['login'];show('login')}
 else goHome();

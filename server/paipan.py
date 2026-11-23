@@ -1,0 +1,765 @@
+"""排盘：八字四柱、紫微斗数命盘、西洋星盘。只用标准库；同样的输入永远得到同样的结果。
+
+天文：太阳用 Meeus《Astronomical Algorithms》第 25 章低精度公式（约 0.01°），月亮用第 47 章主项（约 0.01°），朔用
+第 49 章，水星到土星用 JPL 的近似轨道根数（1800–2050 年，误差角分级）。只有出生时刻正好卡在交节、换座的几分钟里，
+才可能差一格。
+
+时间：出生地的钟表时间按 zoneinfo 换成世界时（中国 1986–1991 年的夏令时也算进去）。八字、紫微的时辰用出生地的
+真太阳时（经度 + 均时差），23 点起算第二天（子初换日）。农历按北京时间。没填城市按北京时间、不做真太阳时校正。
+"""
+import datetime
+import functools
+import math
+import re
+from zoneinfo import ZoneInfo
+
+GAN = "甲乙丙丁戊己庚辛壬癸"
+ZHI = "子丑寅卯辰巳午未申酉戌亥"
+GAN_WX = "木木火火土土金金水水"
+ZHI_WX = "水土木木土火火土金金土水"
+CANG = ["癸", "己癸辛", "甲丙戊", "乙", "戊乙癸", "丙戊庚", "丁己", "己丁乙", "庚壬戊", "辛", "戊辛丁", "壬甲"]  # 地支藏干，本气在前
+ANIMALS = "鼠牛虎兔龙蛇马羊猴鸡狗猪"
+NAYIN = ("海中金 炉中火 大林木 路旁土 剑锋金 山头火 涧下水 城头土 白蜡金 杨柳木 泉中水 屋上土 霹雳火 松柏木 长流水 "
+         "沙中金 山下火 平地木 壁上土 金箔金 覆灯火 天河水 大驿土 钗钏金 桑柘木 大溪水 沙中土 天上火 石榴木 大海水").split()
+SIGNS = ["白羊", "金牛", "双子", "巨蟹", "狮子", "处女", "天秤", "天蝎", "射手", "摩羯", "水瓶", "双鱼"]
+MONTHS = ["", "正", "二", "三", "四", "五", "六", "七", "八", "九", "十", "冬", "腊"]
+SLOTS = {"夜里": (0, 6), "上午": (6, 12), "下午": (12, 18), "晚上": (18, 24)}  # the page's "记不清？选个大概"
+
+# ------------------------------------------------------------------ 天文
+J2000 = 2451545.0
+R, DEG = math.radians, math.degrees
+
+
+def jd_ut(utc):
+    """Naive UTC datetime -> Julian Day."""
+    return J2000 + (utc - datetime.datetime(2000, 1, 1, 12)).total_seconds() / 86400
+
+
+def utc_of(jd):
+    return datetime.datetime(2000, 1, 1, 12) + datetime.timedelta(days=jd - J2000)
+
+
+_DELTA_T = [(1900, -3), (1910, 10), (1920, 21), (1930, 24), (1940, 24), (1950, 29), (1960, 33), (1970, 40), (1980, 51),
+            (1990, 57), (2000, 64), (2010, 66), (2020, 69), (2030, 72), (2050, 80), (2100, 100)]
+
+
+def tt(jd):
+    """UT -> TT (ΔT in seconds, interpolated; a minute either way moves nothing here)."""
+    y = 2000 + (jd - J2000) / 365.25
+    pts = _DELTA_T
+    y = min(max(y, pts[0][0]), pts[-1][0])
+    for (y0, d0), (y1, d1) in zip(pts, pts[1:]):
+        if y <= y1:
+            return jd + (d0 + (d1 - d0) * (y - y0) / (y1 - y0)) / 86400
+    return jd
+
+
+def _cent(jde):
+    return (jde - J2000) / 36525
+
+
+def nutation(T):
+    """(Δψ, true obliquity ε) in degrees, Meeus ch. 22 (low precision)."""
+    om, L, Lm = R(125.04452 - 1934.136261 * T), R(280.4665 + 36000.7698 * T), R(218.3165 + 481267.8813 * T)
+    dpsi = (-17.20 * math.sin(om) - 1.32 * math.sin(2 * L) - 0.23 * math.sin(2 * Lm) + 0.21 * math.sin(2 * om)) / 3600
+    deps = (9.20 * math.cos(om) + 0.57 * math.cos(2 * L) + 0.10 * math.cos(2 * Lm) - 0.09 * math.cos(2 * om)) / 3600
+    return dpsi, 23.439291111 - 0.0130041667 * T - 1.639e-7 * T * T + 5.036e-7 * T ** 3 + deps
+
+
+# VSOP87, the Earth's heliocentric longitude as abridged in Meeus appendix III: per power of τ, (A, B, C) for A cos(B + Cτ)
+_VSOP_L = [
+    [(175347046, 0, 0), (3341656, 4.6692568, 6283.07585), (34894, 4.6261, 12566.1517), (3497, 2.7441, 5753.3849),
+     (3418, 2.8289, 3.5231), (3136, 3.6277, 77713.7715), (2676, 4.4181, 7860.4194), (2343, 6.1352, 3930.2097),
+     (1324, 0.7425, 11506.7698), (1273, 2.0371, 529.691), (1199, 1.1096, 1577.3435), (990, 5.233, 5884.927),
+     (902, 2.045, 26.298), (857, 3.508, 398.149), (780, 1.179, 5223.694), (753, 2.533, 5507.553),
+     (505, 4.583, 18849.228), (492, 4.205, 775.523), (357, 2.92, 0.067), (317, 5.849, 11790.629),
+     (284, 1.899, 796.298), (271, 0.315, 10977.079), (243, 0.345, 5486.778), (206, 4.806, 2544.314),
+     (205, 1.869, 5573.143), (202, 2.458, 6069.777), (156, 0.833, 213.299), (132, 3.411, 2942.463),
+     (126, 1.083, 20.775), (115, 0.645, 0.98), (103, 0.636, 4694.003), (102, 0.976, 15720.839),
+     (102, 4.267, 7.114), (99, 6.21, 2146.17), (98, 0.68, 155.42), (86, 5.98, 161000.69), (85, 1.3, 6275.96),
+     (85, 3.67, 71430.7), (80, 1.81, 17260.15), (79, 3.04, 12036.46), (75, 1.76, 5088.63), (74, 3.5, 3154.69),
+     (74, 4.68, 801.82), (70, 0.83, 9437.76), (62, 3.98, 8827.39), (61, 1.82, 7084.9), (57, 2.78, 6286.6),
+     (56, 4.39, 14143.5), (56, 3.47, 6279.55), (52, 0.19, 12139.55), (52, 1.33, 1748.02), (51, 0.28, 5856.48),
+     (49, 0.49, 1194.45), (41, 5.37, 8429.24), (41, 2.4, 19651.05), (39, 6.17, 10447.39), (37, 6.04, 10213.29),
+     (37, 2.57, 1059.38), (36, 1.71, 2352.87), (36, 1.78, 6812.77), (33, 0.59, 17789.85), (30, 0.44, 83996.85),
+     (30, 2.74, 1349.87), (25, 3.16, 4690.48)],
+    [(628331966747, 0, 0), (206059, 2.678235, 6283.07585), (4303, 2.6351, 12566.1517), (425, 1.59, 3.523),
+     (119, 5.796, 26.298), (109, 2.966, 1577.344), (93, 2.59, 18849.23), (72, 1.14, 529.69), (68, 1.87, 398.15),
+     (67, 4.41, 5507.55), (59, 2.89, 5223.69), (56, 2.17, 155.42), (45, 0.4, 796.3), (36, 0.47, 775.52),
+     (29, 2.65, 7.11), (21, 5.34, 0.98), (19, 1.85, 5486.78), (19, 4.97, 213.3), (17, 2.99, 6275.96),
+     (16, 0.03, 2544.31), (16, 1.43, 2146.17), (15, 1.21, 10977.08), (12, 2.83, 1748.02), (12, 3.26, 5088.63),
+     (12, 5.27, 1194.45), (12, 2.08, 4694.0), (11, 0.77, 553.57), (10, 1.3, 6286.6), (10, 4.24, 1349.87),
+     (9, 2.7, 242.73), (9, 5.64, 951.72), (8, 5.3, 2352.87), (6, 2.65, 9437.76), (6, 4.67, 4690.48)],
+    [(52919, 0, 0), (8720, 1.0721, 6283.0758), (309, 0.867, 12566.152), (27, 0.05, 3.52), (16, 5.19, 26.3),
+     (16, 3.68, 155.42), (10, 0.76, 18849.23), (9, 2.06, 77713.77), (7, 0.83, 775.52), (5, 4.66, 1577.34),
+     (4, 1.03, 7.11), (4, 3.44, 5573.14), (3, 5.14, 796.3), (3, 6.05, 5507.55), (3, 1.19, 242.73), (3, 6.12, 529.69),
+     (3, 0.31, 398.15), (3, 2.28, 553.57), (2, 4.38, 5223.69), (2, 3.75, 0.98)],
+    [(289, 5.844, 6283.076), (35, 0, 0), (17, 5.49, 12566.15), (3, 5.2, 155.42), (1, 4.72, 3.52), (1, 5.3, 18849.23),
+     (1, 5.97, 242.73)],
+    [(114, 3.142, 0), (8, 4.13, 6283.08), (1, 3.84, 12566.15)],
+    [(1, 3.14, 0)],
+]
+
+
+def sun_lon(jde):
+    """Apparent ecliptic longitude of the Sun: VSOP87 (abridged) + FK5 + nutation + aberration (Meeus ch. 25, 32)."""
+    tau = (jde - J2000) / 365250
+    L = sum(sum(a * math.cos(b + c * tau) for a, b, c in terms) * tau ** i for i, terms in enumerate(_VSOP_L)) / 1e8
+    return (DEG(L) + 180 + (nutation(tau * 10)[0] * 3600 - 0.09033 - 20.4898) / 3600) % 360
+
+
+# Meeus table 47.A, longitude terms: D, M, M', F, coefficient (1e-6 degree)
+_MOON = [(0, 0, 1, 0, 6288774), (2, 0, -1, 0, 1274027), (2, 0, 0, 0, 658314), (0, 0, 2, 0, 213618),
+         (0, 1, 0, 0, -185116), (0, 0, 0, 2, -114332), (2, 0, -2, 0, 58793), (2, -1, -1, 0, 57066),
+         (2, 0, 1, 0, 53322), (2, -1, 0, 0, 45758), (0, 1, -1, 0, -40923), (1, 0, 0, 0, -34720),
+         (0, 1, 1, 0, -30383), (2, 0, 0, -2, 15327), (0, 0, 1, 2, -12528), (0, 0, 1, -2, 10980),
+         (4, 0, -1, 0, 10675), (0, 0, 3, 0, 10034), (4, 0, -2, 0, 8548), (2, 1, -1, 0, -7888),
+         (2, 1, 0, 0, -6766), (1, 0, -1, 0, -5163), (1, 1, 0, 0, 4987), (2, -1, 1, 0, 4036),
+         (2, 0, 2, 0, 3994), (4, 0, 0, 0, 3861), (2, 0, -3, 0, 3665), (0, 1, -2, 0, -2689),
+         (2, 0, -1, 2, -2602), (2, -1, -2, 0, 2390), (1, 0, 1, 0, -2348), (2, -2, 0, 0, 2236),
+         (0, 1, 2, 0, -2120), (0, 2, 0, 0, -2069), (2, -2, -1, 0, 2048), (2, 0, 1, -2, -1773),
+         (2, 0, 0, 2, -1595), (4, -1, -1, 0, 1215), (0, 0, 2, 2, -1110), (3, 0, -1, 0, -892),
+         (2, 1, 1, 0, -810), (4, -1, -2, 0, 759), (0, 2, -1, 0, -713), (2, 2, -1, 0, -700),
+         (2, 1, -2, 0, 691), (2, -1, 0, -2, 596), (4, 0, 1, 0, 549), (0, 0, 4, 0, 537),
+         (4, -1, 0, 0, 520), (1, 0, -2, 0, -487), (2, 1, 0, -2, -399), (0, 0, 2, -2, -381),
+         (1, 1, 1, 0, 351), (3, 0, -2, 0, -340), (4, 0, -3, 0, 330), (2, -1, 2, 0, 327),
+         (0, 2, 1, 0, -323), (1, 1, -1, 0, 299), (2, 0, 3, 0, 294)]
+
+
+def moon_lon(jde):
+    """Apparent ecliptic longitude of the Moon (Meeus ch. 47)."""
+    T = _cent(jde)
+    Lp = 218.3164477 + 481267.88123421 * T - 0.0015786 * T * T + T ** 3 / 538841 - T ** 4 / 65194000
+    D = 297.8501921 + 445267.1114034 * T - 0.0018819 * T * T + T ** 3 / 545868 - T ** 4 / 113065000
+    M = 357.5291092 + 35999.0502909 * T - 0.0001536 * T * T + T ** 3 / 24490000
+    Mp = 134.9633964 + 477198.8675055 * T + 0.0087414 * T * T + T ** 3 / 69699 - T ** 4 / 14712000
+    F = 93.2720950 + 483202.0175233 * T - 0.0036539 * T * T - T ** 3 / 3526000 + T ** 4 / 863310000
+    E = 1 - 0.002516 * T - 0.0000074 * T * T
+    s = sum(c * E ** abs(m) * math.sin(R(d * D + m * M + mp * Mp + f * F)) for d, m, mp, f, c in _MOON)
+    s += 3958 * math.sin(R(119.75 + 131.849 * T)) + 1962 * math.sin(R(Lp - F)) + 318 * math.sin(R(53.09 + 479264.290 * T))
+    return (Lp + s / 1e6 + nutation(T)[0]) % 360
+
+
+def new_moon(k):
+    """JDE (TT) of new moon number k (k = 0 near 2000-01-06), Meeus ch. 49."""
+    T = k / 1236.85
+    jde = 2451550.09766 + 29.530588861 * k + 0.00015437 * T * T - 0.00000015 * T ** 3 + 0.00000000073 * T ** 4
+    E = 1 - 0.002516 * T - 0.0000074 * T * T
+    M = R(2.5534 + 29.1053567 * k - 0.0000014 * T * T - 0.00000011 * T ** 3)
+    Mp = R(201.5643 + 385.81693528 * k + 0.0107582 * T * T + 0.00001238 * T ** 3 - 0.000000058 * T ** 4)
+    F = R(160.7108 + 390.67050284 * k - 0.0016118 * T * T - 0.00000227 * T ** 3 + 0.000000011 * T ** 4)
+    Om = R(124.7746 - 1.56375588 * k + 0.0020672 * T * T + 0.00000215 * T ** 3)
+    sin = math.sin
+    corr = (-0.40720 * sin(Mp) + 0.17241 * E * sin(M) + 0.01608 * sin(2 * Mp) + 0.01039 * sin(2 * F)
+            + 0.00739 * E * sin(Mp - M) - 0.00514 * E * sin(Mp + M) + 0.00208 * E * E * sin(2 * M)
+            - 0.00111 * sin(Mp - 2 * F) - 0.00057 * sin(Mp + 2 * F) + 0.00056 * E * sin(2 * Mp + M)
+            - 0.00042 * sin(3 * Mp) + 0.00042 * E * sin(M + 2 * F) + 0.00038 * E * sin(M - 2 * F)
+            - 0.00024 * E * sin(2 * Mp - M) - 0.00017 * sin(Om) - 0.00007 * sin(Mp + 2 * M)
+            + 0.00004 * sin(2 * Mp - 2 * F) + 0.00004 * sin(3 * M) + 0.00003 * sin(Mp + M - 2 * F)
+            + 0.00003 * sin(2 * Mp + 2 * F) - 0.00003 * sin(Mp + M + 2 * F) + 0.00003 * sin(Mp - M + 2 * F)
+            - 0.00002 * sin(Mp - M - 2 * F) - 0.00002 * sin(3 * Mp + M) + 0.00002 * sin(4 * Mp))
+    args = [(325, 299.77 + 0.107408 * k - 0.009173 * T * T), (165, 251.88 + 0.016321 * k), (164, 251.83 + 26.651886 * k),
+            (126, 349.42 + 36.412478 * k), (110, 84.66 + 18.206239 * k), (62, 141.74 + 53.303771 * k),
+            (60, 207.14 + 2.453732 * k), (56, 154.84 + 7.30686 * k), (47, 34.52 + 27.261239 * k),
+            (42, 207.19 + 0.121824 * k), (40, 291.34 + 1.844379 * k), (37, 161.72 + 24.198154 * k),
+            (35, 239.56 + 25.513099 * k), (23, 331.55 + 3.592518 * k)]
+    return jde + corr + sum(c * 1e-6 * sin(R(a)) for c, a in args)
+
+
+# JPL "Approximate Positions of the Planets", table 1 (1800–2050): a, e, I, L, ϖ, Ω and their rates per century
+_ORBITS = {
+    "水星": ((0.38709927, 0.20563593, 7.00497902, 252.25032350, 77.45779628, 48.33076593),
+           (0.00000037, 0.00001906, -0.00594749, 149472.67411175, 0.16047689, -0.12534081)),
+    "金星": ((0.72333566, 0.00677672, 3.39467605, 181.97909950, 131.60246718, 76.67984255),
+           (0.00000390, -0.00004107, -0.00078890, 58517.81538729, 0.00268329, -0.27769418)),
+    "地球": ((1.00000261, 0.01671123, -0.00001531, 100.46457166, 102.93768193, 0.0),
+           (0.00000562, -0.00004392, -0.01294668, 35999.37244981, 0.32327364, 0.0)),
+    "火星": ((1.52371034, 0.09339410, 1.84969142, -4.55343205, -23.94362959, 49.55953891),
+           (0.00001847, 0.00007882, -0.00813131, 19140.30268499, 0.44441088, -0.29257343)),
+    "木星": ((5.20288700, 0.04838624, 1.30439695, 34.39644051, 14.72847983, 100.47390909),
+           (-0.00011607, -0.00013253, -0.00183714, 3034.74612775, 0.21252668, 0.20469106)),
+    "土星": ((9.53667594, 0.05386179, 2.48599187, 49.95424423, 92.59887831, 113.66242448),
+           (-0.00125060, -0.00050991, 0.00193609, 1222.49362201, -0.41897216, -0.28867794)),
+}
+
+
+def _helio(name, T):
+    a, e, inc, L, peri, node = (x + r * T for x, r in zip(*_ORBITS[name]))
+    w, M = R(peri - node), (L - peri + 180) % 360 - 180
+    E = M + DEG(e) * math.sin(R(M))
+    for _ in range(20):
+        dE = (M - (E - DEG(e) * math.sin(R(E)))) / (1 - e * math.cos(R(E)))
+        E += dE
+        if abs(dE) < 1e-9:
+            break
+    xp, yp = a * (math.cos(R(E)) - e), a * math.sqrt(1 - e * e) * math.sin(R(E))
+    cw, sw, cn, sn, ci = math.cos(w), math.sin(w), math.cos(R(node)), math.sin(R(node)), math.cos(R(inc))
+    return ((cw * cn - sw * sn * ci) * xp + (-sw * cn - cw * sn * ci) * yp,
+            (cw * sn + sw * cn * ci) * xp + (-sw * sn + cw * cn * ci) * yp)
+
+
+def planet_lon(name, jde):
+    """Geocentric ecliptic longitude of date (J2000 elements + precession + nutation)."""
+    T = _cent(jde)
+    (x, y), (X, Y) = _helio(name, T), _helio("地球", T)
+    return (DEG(math.atan2(y - Y, x - X)) + 1.396971 * T + nutation(T)[0]) % 360
+
+
+def _lon(body, jde):
+    return sun_lon(jde) if body == "太阳" else moon_lon(jde) if body == "月亮" else planet_lon(body, jde)
+
+
+def angles(jd, lat, lon):
+    """(RAMC, ε, MC, ASC) in degrees for UT jd at lat/lon (east positive)."""
+    T = _cent(tt(jd))
+    dpsi, eps = nutation(T)
+    gmst = 280.46061837 + 360.98564736629 * (jd - J2000) + 0.000387933 * T * T - T ** 3 / 38710000
+    ramc = (gmst + dpsi * math.cos(R(eps)) + lon) % 360
+    r, e, f = R(ramc), R(eps), R(lat)
+    mc = DEG(math.atan2(math.sin(r), math.cos(r) * math.cos(e))) % 360
+    asc = DEG(math.atan2(math.cos(r), -(math.sin(r) * math.cos(e) + math.tan(f) * math.sin(e)))) % 360
+    return ramc, eps, mc, asc
+
+
+def houses(ramc, eps, lat, mc, asc):
+    """Twelve cusps, Placidus (Porphyry where Placidus has no answer, above the polar circles)."""
+    e, f = R(eps), R(lat)
+
+    def cusp(frac, upper):
+        ra = ramc + (frac * 90 if upper else 180 - frac * 90)  # the equator's answer, then iterate
+        for _ in range(60):
+            lam = math.atan2(math.sin(R(ra)), math.cos(R(ra)) * math.cos(e))
+            x = math.tan(f) * math.tan(math.asin(math.sin(e) * math.sin(lam)))
+            if abs(x) >= 1:
+                return None
+            ad = DEG(math.asin(x))
+            new = ramc + frac * (90 + ad) if upper else ramc + 180 - frac * (90 - ad)
+            if abs((new - ra + 180) % 360 - 180) < 1e-8:
+                break
+            ra = new
+        return DEG(lam) % 360
+
+    c11, c12, c2, c3 = cusp(1 / 3, True), cusp(2 / 3, True), cusp(2 / 3, False), cusp(1 / 3, False)
+    if None in (c11, c12, c2, c3):
+        q1, q2 = (asc - mc) % 360, (mc + 180 - asc) % 360  # Porphyry: trisect each quadrant
+        c11, c12, c2, c3 = mc + q1 / 3, mc + 2 * q1 / 3, asc + q2 / 3, asc + 2 * q2 / 3
+    cusps = [asc, c2, c3, mc + 180, c11 + 180, c12 + 180, asc + 180, c2 + 180, c3 + 180, mc, c11, c12]
+    return [c % 360 for c in cusps]
+
+
+def house_of(lam, cusps):
+    for i in range(12):
+        if (lam - cusps[i]) % 360 < (cusps[(i + 1) % 12] - cusps[i]) % 360:
+            return i + 1
+    return 1
+
+
+def sign_deg(lam):
+    return SIGNS[int(lam // 30) % 12], int(lam % 30)
+
+
+# ------------------------------------------------------------------ 时间
+BJ = datetime.timedelta(hours=8)
+
+
+def bj_date(jde):
+    return (utc_of(jde - (tt(jde) - jde)) + BJ).date()  # TT -> UT (ΔT barely changes in a day) -> Beijing date
+
+
+def sun_at_bj_midnight(d):
+    return sun_lon(tt(jd_ut(datetime.datetime.combine(d, datetime.time()) - BJ)))
+
+
+def term_jde(target, jde):
+    """JDE when the Sun reaches longitude `target`, starting from a guess within ~10 days."""
+    for _ in range(8):
+        jde += ((target - sun_lon(jde) + 180) % 360 - 180) / 0.98564736
+    return jde
+
+
+def solar_time(utc, lon):
+    """Local apparent (true) solar time: UT + longitude + equation of time (Meeus 28.3)."""
+    jde = tt(jd_ut(utc))
+    T = _cent(jde)
+    dpsi, eps = nutation(T)
+    lam = sun_lon(jde)
+    alpha = DEG(math.atan2(math.cos(R(eps)) * math.sin(R(lam)), math.cos(R(lam))))
+    eot = ((280.46646 + 36000.76983 * T + 0.0003032 * T * T - 0.0057183 - alpha + dpsi * math.cos(R(eps))) + 180) % 360 - 180
+    return utc + datetime.timedelta(hours=lon / 15, minutes=4 * eot)
+
+
+# ------------------------------------------------------------------ 农历
+@functools.lru_cache(maxsize=256)
+def _sui(Y):
+    """Lunar months from the one holding the winter solstice of Y-1 up to the one holding that of Y:
+    ([(start date, month number, leap)], start of the next month 11)."""
+    ws = [bj_date(term_jde(270, J2000 + (y - 2000) * 365.2422 - 10.5)) for y in (Y - 1, Y)]
+    k0 = math.floor((J2000 + (Y - 2001) * 365.2422 - 2451550.1) / 29.530588861) - 2
+    starts = [bj_date(new_moon(k)) for k in range(k0, k0 + 18)]
+    a = max(i for i, s in enumerate(starts) if s <= ws[0])
+    b = max(i for i, s in enumerate(starts) if s <= ws[1])
+    leap = None
+    if b - a == 13:  # 13 months: the first one without a 中气 (a multiple of 30° of solar longitude) is the leap month
+        for i in range(a + 1, b):
+            lo, hi = sun_at_bj_midnight(starts[i]), sun_at_bj_midnight(starts[i + 1])
+            if ((hi - lo) % 360 + lo % 30) < 30:
+                leap = i
+                break
+    out, no = [], 11
+    for i in range(a, b):
+        if i == leap:
+            out.append((starts[i], out[-1][1], True))
+        else:
+            out.append((starts[i], no, False))
+            no = no % 12 + 1
+    return out, starts[b]
+
+
+def lunar(d):
+    """Beijing date -> (lunar year, month, day, leap)."""
+    for Y in (d.year, d.year + 1):
+        months, end = _sui(Y)
+        if months[0][0] <= d < end:
+            break
+    start, no, leap = next(m for m in reversed(months) if m[0] <= d)
+    return (d.year if no < 11 or d.month > 6 else d.year - 1), no, (d - start).days + 1, leap
+
+
+def lunar_text(y, m, d, leap):
+    day = ("初" + "一二三四五六七八九十"[d - 1]) if d <= 10 else ("十" + "一二三四五六七八九"[d - 11]) if d < 20 else \
+        "二十" if d == 20 else ("廿" + "一二三四五六七八九"[d - 21]) if d < 30 else "三十"
+    return "%s年%s%s月%s" % (gz(y - 4), "闰" if leap else "", MONTHS[m], day)
+
+
+# ------------------------------------------------------------------ 干支、八字
+def gz(i):
+    return GAN[i % 10] + ZHI[i % 12]
+
+
+def gz_index(stem, branch):
+    return (6 * stem - 5 * branch) % 60
+
+
+def day_index(d):
+    return (d.toordinal() + 1721425 + 49) % 60  # JDN + 49: 1949-10-01 is 甲子
+
+
+def hour_branch(t):
+    return (t.hour * 60 + t.minute + 60) // 120 % 12
+
+
+def ten_god(dm, s):
+    rel = (s // 2 - dm // 2) % 5  # 0 same element, 1 I produce, 2 I control, 3 controls me, 4 produces me
+    return [("比肩", "劫财"), ("食神", "伤官"), ("偏财", "正财"), ("七杀", "正官"), ("偏印", "正印")][rel][dm % 2 != s % 2]
+
+
+def jie_month(lam):
+    """0 = 寅月 (立春 to 惊蛰) ... 11 = 丑月 (小寒 to 立春)."""
+    return int(((lam - 315) % 360) // 30)
+
+
+DM_SAY = {"甲": "参天大树：直，往上长，认准了不爱拐弯", "乙": "花草藤蔓：柔韧，会借力，弯得下去也站得起来",
+          "丙": "太阳：热，坦荡，藏不住事，爱照着别人", "丁": "灯火烛光：细腻，暖在身边，心思多",
+          "戊": "高山厚土：稳，扛事，慢热，不爱变", "己": "田园的土：包容，会照顾人，心里有本账",
+          "庚": "刀斧原矿：刚，讲义气，说话直，敢下决断", "辛": "珠玉首饰：精致，要面子，敏感，讲究",
+          "壬": "江河大水：聪明，闲不住，想得远", "癸": "雨露：细，润物无声，心思深，想得多"}
+
+
+# ------------------------------------------------------------------ 紫微斗数
+PALACES = ["命宫", "兄弟宫", "夫妻宫", "子女宫", "财帛宫", "疾厄宫", "迁移宫", "交友宫", "官禄宫", "田宅宫", "福德宫", "父母宫"]
+JU = {"水": 2, "木": 3, "金": 4, "土": 5, "火": 6}
+JU_NAME = {2: "水二局", 3: "木三局", 4: "金四局", 5: "土五局", 6: "火六局"}
+SIHUA = {"甲": "廉贞破军武曲太阳", "乙": "天机天梁紫微太阴", "丙": "天同天机文昌廉贞", "丁": "太阴天同天机巨门",
+         "戊": "贪狼太阴右弼天机", "己": "武曲贪狼天梁文曲", "庚": "太阳武曲太阴天同", "辛": "巨门太阳文曲文昌",
+         "壬": "天梁紫微左辅武曲", "癸": "破军巨门太阴贪狼"}
+STAR_SAY = {"紫微": "帝星，有主见，要面子，喜欢把局面握在手里", "天机": "智慧星，脑子快，爱琢磨，想得多、变得也快",
+            "太阳": "热心的星，爱付出，讲面子，闲不住", "武曲": "财星，刚毅果断，务实，做事讲结果",
+            "天同": "福星，随和，会享受，不爱争", "廉贞": "有原则也有个性的星，爱较劲，心思不简单",
+            "天府": "库星，稳重，守得住，懂经营也会照顾人", "太阴": "温柔细腻的星，重感受，恋家，心思藏得深",
+            "贪狼": "多才多艺的星，爱交朋友，好奇心重，想要的多", "巨门": "主口才的星，爱较真，凡事想问个明白",
+            "天相": "印星，讲公道，会协调，爱帮人", "天梁": "荫星，像个长辈，爱照顾人、讲原则",
+            "七杀": "将星，独立，敢冲，不服输", "破军": "敢破敢立的星，爱变动，不按常理出牌"}
+MAIN_STARS = ["紫微", "天机", "太阳", "武曲", "天同", "廉贞", "天府", "太阴", "贪狼", "巨门", "天相", "天梁", "七杀", "破军"]
+
+
+def ziwei(year_stem, year_branch, month, day, hb):
+    """The twelve palaces: [{name, branch, gz, main, minor}] in palace order, plus 命宫/身宫/局/四化."""
+    ming, shen = (2 + month - 1 - hb) % 12, (2 + month - 1 + hb) % 12
+    yin_stem = (year_stem % 5 * 2 + 2) % 10  # 五虎遁：寅宫的天干
+
+    def stem_of(b):
+        return (yin_stem + (b - 2) % 12) % 10
+
+    ming_gz = gz_index(stem_of(ming), ming)
+    ju = JU[NAYIN[ming_gz // 2][-1]]
+    k = -day % ju
+    q = (day + k) // ju
+    zw = (2 + q - 1 + (k if k % 2 == 0 else -k)) % 12
+    tf = (4 - zw) % 12
+    pos = {"紫微": zw, "天机": zw - 1, "太阳": zw - 3, "武曲": zw - 4, "天同": zw - 5, "廉贞": zw - 8,
+           "天府": tf, "太阴": tf + 1, "贪狼": tf + 2, "巨门": tf + 3, "天相": tf + 4, "天梁": tf + 5, "七杀": tf + 6,
+           "破军": tf + 10}
+    lu = [2, 3, 5, 6, 5, 6, 8, 9, 11, 0][year_stem]
+    kui, yue = [(1, 7), (0, 8), (11, 9), (11, 9), (1, 7), (0, 8), (1, 7), (6, 2), (3, 5), (3, 5)][year_stem]
+    fire, bell = {2: (1, 3), 6: (1, 3), 10: (1, 3), 8: (2, 10), 0: (2, 10), 4: (2, 10),
+                  5: (3, 10), 9: (3, 10), 1: (3, 10), 11: (9, 10), 3: (9, 10), 7: (9, 10)}[year_branch]
+    minor = {"文昌": 10 - hb, "文曲": 4 + hb, "左辅": 4 + month - 1, "右弼": 10 - (month - 1), "天魁": kui, "天钺": yue,
+             "禄存": lu, "擎羊": lu + 1, "陀罗": lu - 1, "地空": 11 - hb, "地劫": 11 + hb, "火星": fire + hb, "铃星": bell + hb}
+    hua = dict(zip((SIHUA[GAN[year_stem]][i:i + 2] for i in range(0, 8, 2)), "禄权科忌"))
+    palaces = []
+    for i, name in enumerate(PALACES):
+        b = (ming - i) % 12
+        mains = [s for s in MAIN_STARS if pos[s] % 12 == b]
+        minors = [s for s in minor if minor[s] % 12 == b]
+        palaces.append({"name": name, "branch": ZHI[b], "gz": GAN[stem_of(b)] + ZHI[b],
+                        "main": [s + ("化" + hua[s] if s in hua else "") for s in mains],
+                        "minor": [s + ("化" + hua[s] if s in hua else "") for s in minors], "_main": mains})
+    shen_in = next(p["name"] for p in palaces if p["branch"] == ZHI[shen])
+    return {"palaces": palaces, "ming": ZHI[ming], "shen": ZHI[shen], "shen_in": shen_in, "ju": JU_NAME[ju],
+            "hua": "，".join("%s化%s" % (s, h) for s, h in hua.items())}
+
+
+# ------------------------------------------------------------------ 西洋星盘
+MOON_SAY = {"白羊": "情绪来得快去得快，不痛快当场就说", "金牛": "要安稳，熟悉的人和东西让你踏实",
+            "双子": "心里闷了想找人说，说着说着就散了", "巨蟹": "恋家念旧，照顾人、被照顾都让你安心",
+            "狮子": "需要被看见、被肯定，委屈了也要撑着体面", "处女": "情绪先过一遍脑子，心里乱的时候爱收拾东西",
+            "天秤": "怕起冲突，心里不舒服也先顾着气氛", "天蝎": "感受深，记得久，轻易不交底",
+            "射手": "闷了就想出去走走，要空间、要自由", "摩羯": "情绪往里收，习惯自己扛，不轻易示弱",
+            "水瓶": "跟情绪隔着一点距离，需要自己的空间", "双鱼": "心软，容易被别人的情绪带走，也容易心疼人"}
+ASC_SAY = {"白羊": "直接、有冲劲，第一眼就很有精神", "金牛": "温和稳当，不慌不忙", "双子": "机灵爱聊，反应快",
+           "巨蟹": "亲切好说话，有点慢热", "狮子": "大方、有气场，容易被注意到", "处女": "干净利落，细致，有点挑剔",
+           "天秤": "随和有礼，好相处", "天蝎": "有点距离感，安静，让人猜不透", "射手": "开朗随性，爱笑",
+           "摩羯": "稳重靠谱，有点严肃", "水瓶": "有自己的一套，友好但不黏人", "双鱼": "温柔，有点迷糊，让人想照顾"}
+BODIES = ["太阳", "月亮", "水星", "金星", "火星", "木星", "土星"]
+
+
+def moon_change(t0, t1):
+    """If the Moon changes sign between two UTC datetimes: (sign before, sign after, UTC of the change)."""
+    a, b = sign_deg(moon_lon(tt(jd_ut(t0))))[0], sign_deg(moon_lon(tt(jd_ut(t1))))[0]
+    if a == b:
+        return None
+    for _ in range(30):
+        mid = t0 + (t1 - t0) / 2
+        if sign_deg(moon_lon(tt(jd_ut(mid))))[0] == a:
+            t0 = mid
+        else:
+            t1 = mid
+    return a, b, t1
+
+
+# ------------------------------------------------------------------ 出生地
+# 城市：纬度、经度（东经为正）、时区。大陆一律北京时间（新疆、西藏的出生记录也用北京时间）。
+_CN = "Asia/Shanghai"
+CITIES = {
+    "北京": (39.90, 116.40), "天津": (39.13, 117.20), "上海": (31.23, 121.47), "重庆": (29.56, 106.55),
+    "石家庄": (38.04, 114.51), "唐山": (39.63, 118.18), "保定": (38.87, 115.46), "邯郸": (36.61, 114.49),
+    "秦皇岛": (39.94, 119.60), "张家口": (40.77, 114.88), "承德": (40.95, 117.96), "沧州": (38.30, 116.84),
+    "廊坊": (39.52, 116.70), "邢台": (37.07, 114.50), "衡水": (37.74, 115.67),
+    "太原": (37.87, 112.55), "大同": (40.08, 113.30), "运城": (35.03, 111.00), "长治": (36.20, 113.12),
+    "临汾": (36.09, 111.52), "晋中": (37.69, 112.75),
+    "呼和浩特": (40.84, 111.75), "包头": (40.66, 109.84), "赤峰": (42.26, 118.89), "鄂尔多斯": (39.61, 109.78),
+    "沈阳": (41.80, 123.43), "大连": (38.91, 121.61), "鞍山": (41.11, 122.99), "抚顺": (41.88, 123.96),
+    "锦州": (41.10, 121.13), "丹东": (40.00, 124.35), "营口": (40.67, 122.24),
+    "长春": (43.82, 125.32), "吉林市": (43.84, 126.55), "哈尔滨": (45.80, 126.53), "齐齐哈尔": (47.35, 123.92),
+    "大庆": (46.59, 125.10), "牡丹江": (44.55, 129.63), "佳木斯": (46.80, 130.32),
+    "南京": (32.06, 118.80), "苏州": (31.30, 120.62), "无锡": (31.49, 120.31), "常州": (31.81, 119.97),
+    "南通": (31.98, 120.89), "扬州": (32.39, 119.41), "徐州": (34.26, 117.18), "盐城": (33.35, 120.16),
+    "镇江": (32.19, 119.42), "泰州": (32.46, 119.92), "淮安": (33.61, 119.02), "连云港": (34.60, 119.22),
+    "宿迁": (33.96, 118.28), "昆山": (31.38, 120.98),
+    "杭州": (30.27, 120.16), "宁波": (29.87, 121.55), "温州": (28.00, 120.70), "绍兴": (30.00, 120.58),
+    "嘉兴": (30.75, 120.76), "湖州": (30.89, 120.09), "金华": (29.08, 119.65), "义乌": (29.31, 120.08),
+    "台州": (28.66, 121.42), "衢州": (28.97, 118.87), "丽水": (28.45, 119.92), "舟山": (29.99, 122.21),
+    "合肥": (31.82, 117.23), "芜湖": (31.35, 118.43), "蚌埠": (32.92, 117.39), "安庆": (30.54, 117.06),
+    "阜阳": (32.89, 115.81), "马鞍山": (31.67, 118.51), "淮南": (32.63, 117.00), "黄山": (29.71, 118.34),
+    "福州": (26.07, 119.30), "厦门": (24.48, 118.09), "泉州": (24.87, 118.68), "漳州": (24.51, 117.65),
+    "莆田": (25.45, 119.01),
+    "南昌": (28.68, 115.86), "赣州": (25.83, 114.93), "九江": (29.71, 116.00), "上饶": (28.45, 117.94),
+    "景德镇": (29.27, 117.18), "宜春": (27.81, 114.42),
+    "济南": (36.65, 117.12), "青岛": (36.07, 120.38), "烟台": (37.46, 121.45), "潍坊": (36.71, 119.16),
+    "淄博": (36.81, 118.05), "临沂": (35.10, 118.36), "济宁": (35.41, 116.59), "威海": (37.51, 122.12),
+    "泰安": (36.20, 117.09), "德州": (37.43, 116.36), "聊城": (36.46, 115.99), "菏泽": (35.23, 115.48),
+    "日照": (35.42, 119.53), "枣庄": (34.81, 117.32), "东营": (37.43, 118.67), "滨州": (37.38, 117.97),
+    "郑州": (34.75, 113.62), "洛阳": (34.62, 112.45), "开封": (34.80, 114.31), "南阳": (32.99, 112.53),
+    "新乡": (35.30, 113.93), "安阳": (36.10, 114.39), "商丘": (34.41, 115.66), "信阳": (32.15, 114.09),
+    "周口": (33.63, 114.65), "驻马店": (33.01, 114.02), "平顶山": (33.77, 113.19), "焦作": (35.22, 113.24),
+    "许昌": (34.04, 113.85),
+    "武汉": (30.59, 114.31), "宜昌": (30.69, 111.29), "襄阳": (32.01, 112.12), "荆州": (30.33, 112.24),
+    "黄石": (30.20, 115.04), "十堰": (32.63, 110.80), "孝感": (30.92, 113.92),
+    "长沙": (28.23, 112.94), "株洲": (27.83, 113.13), "湘潭": (27.83, 112.94), "衡阳": (26.89, 112.57),
+    "岳阳": (29.36, 113.13), "常德": (29.03, 111.70), "邵阳": (27.24, 111.47), "郴州": (25.77, 113.01),
+    "怀化": (27.55, 110.00), "张家界": (29.12, 110.48),
+    "广州": (23.13, 113.26), "深圳": (22.54, 114.06), "珠海": (22.27, 113.58), "佛山": (23.02, 113.12),
+    "东莞": (23.02, 113.75), "中山": (22.52, 113.39), "惠州": (23.11, 114.42), "汕头": (23.35, 116.68),
+    "江门": (22.58, 113.08), "湛江": (21.27, 110.36), "茂名": (21.66, 110.92), "肇庆": (23.05, 112.47),
+    "梅州": (24.29, 116.12), "潮州": (23.66, 116.62), "揭阳": (23.55, 116.37), "韶关": (24.81, 113.60),
+    "清远": (23.68, 113.06),
+    "南宁": (22.82, 108.37), "柳州": (24.33, 109.42), "桂林": (25.27, 110.29), "北海": (21.48, 109.12),
+    "玉林": (22.65, 110.18), "梧州": (23.48, 111.28),
+    "海口": (20.04, 110.20), "三亚": (18.25, 109.51),
+    "成都": (30.57, 104.07), "绵阳": (31.47, 104.68), "德阳": (31.13, 104.40), "宜宾": (28.77, 104.64),
+    "南充": (30.84, 106.11), "泸州": (28.87, 105.44), "乐山": (29.55, 103.77), "自贡": (29.34, 104.78),
+    "达州": (31.21, 107.47), "攀枝花": (26.58, 101.72),
+    "贵阳": (26.65, 106.63), "遵义": (27.73, 106.93),
+    "昆明": (25.04, 102.71), "大理": (25.61, 100.27), "丽江": (26.86, 100.23), "曲靖": (25.49, 103.80),
+    "拉萨": (29.65, 91.13),
+    "西安": (34.34, 108.94), "宝鸡": (34.36, 107.24), "咸阳": (34.33, 108.71), "延安": (36.59, 109.49),
+    "汉中": (33.07, 107.03), "榆林": (38.29, 109.73),
+    "兰州": (36.06, 103.83), "天水": (34.58, 105.72), "西宁": (36.62, 101.78), "银川": (38.49, 106.23),
+    "乌鲁木齐": (43.83, 87.62), "喀什": (39.47, 75.99), "伊宁": (43.92, 81.32), "克拉玛依": (45.58, 84.89),
+    "香港": (22.32, 114.17, "Asia/Hong_Kong"), "澳门": (22.20, 113.54, "Asia/Macau"),
+    "台北": (25.03, 121.57, "Asia/Taipei"), "台中": (24.15, 120.67, "Asia/Taipei"), "高雄": (22.63, 120.30, "Asia/Taipei"),
+    "新加坡": (1.35, 103.82, "Asia/Singapore"), "吉隆坡": (3.14, 101.69, "Asia/Kuala_Lumpur"),
+    "曼谷": (13.76, 100.50, "Asia/Bangkok"), "东京": (35.68, 139.69, "Asia/Tokyo"), "大阪": (34.69, 135.50, "Asia/Tokyo"),
+    "首尔": (37.57, 126.98, "Asia/Seoul"),
+    "悉尼": (-33.87, 151.21, "Australia/Sydney"), "墨尔本": (-37.81, 144.96, "Australia/Melbourne"),
+    "布里斯班": (-27.47, 153.03, "Australia/Brisbane"), "珀斯": (-31.95, 115.86, "Australia/Perth"),
+    "阿德莱德": (-34.93, 138.60, "Australia/Adelaide"), "堪培拉": (-35.28, 149.13, "Australia/Sydney"),
+    "奥克兰": (-36.85, 174.76, "Pacific/Auckland"), "惠灵顿": (-41.29, 174.78, "Pacific/Auckland"),
+    "伦敦": (51.51, -0.13, "Europe/London"), "巴黎": (48.86, 2.35, "Europe/Paris"), "柏林": (52.52, 13.40, "Europe/Berlin"),
+    "纽约": (40.71, -74.01, "America/New_York"), "波士顿": (42.36, -71.06, "America/New_York"),
+    "芝加哥": (41.88, -87.63, "America/Chicago"), "休斯顿": (29.76, -95.37, "America/Chicago"),
+    "洛杉矶": (34.05, -118.24, "America/Los_Angeles"), "旧金山": (37.77, -122.42, "America/Los_Angeles"),
+    "西雅图": (47.61, -122.33, "America/Los_Angeles"), "温哥华": (49.28, -123.12, "America/Vancouver"),
+    "多伦多": (43.65, -79.38, "America/Toronto"), "蒙特利尔": (45.50, -73.57, "America/Toronto"),
+}
+ALIASES = {"sydney": "悉尼", "melbourne": "墨尔本", "brisbane": "布里斯班", "perth": "珀斯", "adelaide": "阿德莱德",
+           "canberra": "堪培拉", "auckland": "奥克兰", "wellington": "惠灵顿", "singapore": "新加坡",
+           "kuala lumpur": "吉隆坡", "bangkok": "曼谷", "tokyo": "东京", "osaka": "大阪", "seoul": "首尔",
+           "london": "伦敦", "paris": "巴黎", "berlin": "柏林", "new york": "纽约", "boston": "波士顿",
+           "chicago": "芝加哥", "houston": "休斯顿", "los angeles": "洛杉矶", "san francisco": "旧金山",
+           "seattle": "西雅图", "vancouver": "温哥华", "toronto": "多伦多", "montreal": "蒙特利尔",
+           "hong kong": "香港", "macau": "澳门", "taipei": "台北", "beijing": "北京", "shanghai": "上海",
+           "首都": "北京", "襄樊": "襄阳", "思茅": "普洱"}
+PROVINCES = {"河北": "石家庄", "山西": "太原", "内蒙古": "呼和浩特", "内蒙": "呼和浩特", "辽宁": "沈阳", "吉林": "长春",
+             "黑龙江": "哈尔滨", "江苏": "南京", "浙江": "杭州", "安徽": "合肥", "福建": "福州", "江西": "南昌",
+             "山东": "济南", "河南": "郑州", "湖北": "武汉", "湖南": "长沙", "广东": "广州", "广西": "南宁",
+             "海南": "海口", "四川": "成都", "贵州": "贵阳", "云南": "昆明", "西藏": "拉萨", "陕西": "西安",
+             "甘肃": "兰州", "青海": "西宁", "宁夏": "银川", "新疆": "乌鲁木齐", "台湾": "台北"}
+
+
+def place(text):
+    """Free text from the form ("浙江湖州", "成都市", "Sydney") -> {name, lat, lon, tz, approx} or None. A city in the
+    table wins; else a province gives its capital, marked approx."""
+    s = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+    if not s:
+        return None
+    for k, v in ALIASES.items():
+        if k in s and v in CITIES:
+            s = s.replace(k, v)
+    hits = [c for c in CITIES if c in s or (c.endswith("市") and c[:-1] == s)]
+    name, approx = (max(hits, key=len), False) if hits else (None, False)
+    if not name:
+        prov = [p for p in PROVINCES if p in s]
+        if not prov:
+            return None
+        name, approx = PROVINCES[max(prov, key=len)], True
+    lat, lon, *tz = CITIES[name]
+    return {"name": name.rstrip("市") if name != "吉林市" else name, "lat": lat, "lon": lon, "tz": tz[0] if tz else _CN,
+            "approx": approx}
+
+
+# ------------------------------------------------------------------ 合起来
+def _parse(date, time):
+    d = datetime.date.fromisoformat(str(date)[:10])
+    if not 1901 <= d.year <= 2099:
+        raise ValueError("birth year out of range")
+    m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(time or ""))
+    t = datetime.time(int(m.group(1)), int(m.group(2))) if m and int(m.group(1)) < 24 and int(m.group(2)) < 60 else None
+    return d, t
+
+
+def _to_utc(local, tz):
+    """Naive local clock time -> (naive UTC, the DST offset in force then)."""
+    loc = local.replace(tzinfo=ZoneInfo(tz))
+    return (loc - loc.utcoffset()).replace(tzinfo=None), loc.dst() or datetime.timedelta()
+
+
+@functools.lru_cache(maxsize=512)
+def chart(date, time="", slot="", city=""):
+    """Everything the page and the selves need. date 'YYYY-MM-DD'; time 'HH:MM' or ''; slot one of SLOTS or ''; city
+    free text or ''. Raises ValueError on a bad date."""
+    d, t = _parse(date, time)
+    pl = place(city)
+    tz = pl["tz"] if pl else _CN
+    notes = []
+    out = {"date": d.isoformat(), "time": t.strftime("%H:%M") if t else "", "place": pl, "notes": notes}
+    if pl and pl["approx"]:
+        notes.append("出生城市“%s”没在表里，按%s的位置估算" % (city, pl["name"]))
+    elif city and not pl:
+        notes.append("出生城市“%s”没认出来，时间按北京时间算，排不了上升和宫位" % city)
+
+    # -- the moment: UTC, and the local time used for 时辰 (true solar time when the place is known)
+    if t:
+        clock = datetime.datetime.combine(d, t)
+        utc, dst = _to_utc(clock, tz)
+        if dst:
+            notes.append("那天当地实行夏令时，钟表上的 %s 是标准时间 %s" % (t.strftime("%H:%M"), (clock - dst).strftime("%H:%M")))
+        local = solar_time(utc, pl["lon"]) if pl else clock - dst
+        out["solar"] = local.strftime("%H:%M") if pl else ""
+    else:
+        utc, local = _to_utc(datetime.datetime.combine(d, datetime.time(12)), tz)[0], None
+    jde = tt(jd_ut(utc))
+
+    # -- 八字
+    lam = sun_lon(jde)
+    mi = jie_month(lam)
+    year = d.year - 1 if d.month <= 2 and mi >= 10 else d.year
+    ys = (year - 4) % 60
+    day = d
+    if local:
+        day = local.date() + datetime.timedelta(days=1 if local.hour >= 23 else 0)
+    di = day_index(day)
+    pillars = [gz(ys), GAN[(ys % 5 * 2 + 2 + mi) % 10] + ZHI[(mi + 2) % 12], gz(di)]
+    if local:
+        hb = hour_branch(local)
+        pillars.append(GAN[(di % 5 * 2 + hb) % 10] + ZHI[hb])
+        if local.hour >= 23:
+            notes.append("真太阳时过了 23 点，按子时算第二天（子初换日）")
+    else:
+        hb = None
+        a0, a1 = (jie_month(sun_lon(tt(jd_ut(_to_utc(datetime.datetime.combine(d, x), tz)[0]))))
+                  for x in (datetime.time(0), datetime.time(23, 59)))
+        if a0 != a1:
+            notes.append("生日那天正好交节，几点出生决定月柱是哪个；现在按中午算")
+    dm = GAN.index(pillars[2][0])
+    chars = "".join(pillars)
+    count = {w: sum(GAN_WX[GAN.index(c)] == w if c in GAN else ZHI_WX[ZHI.index(c)] == w for c in chars) for w in "木火土金水"}
+    out["animal"] = ANIMALS[ys % 12]
+    out["bazi"] = {
+        "pillars": pillars, "dm": GAN[dm] + GAN_WX[dm],
+        "gods": ["%s干%s %s" % (w, p[0], ten_god(dm, GAN.index(p[0]))) for w, p in zip("年月日时", pillars) if w != "日"],
+        "hidden": ["%s %s" % (p[1], CANG[ZHI.index(p[1])]) for p in pillars],
+        "wuxing": count, "missing": "".join(w for w, n in count.items() if not n), "nayin": NAYIN[ys // 2]}
+
+    # -- 农历、紫微 (lunar date of the 八字 day, so 23:00 and later counts as the next day here too)
+    ly, lm, ld, leap = lunar(day)
+    out["lunar"] = lunar_text(ly, lm, ld, leap) + ("，%s时" % ZHI[hb] if hb is not None else "")
+    out["ziwei"] = None
+    if hb is not None:
+        zm = lm % 12 + 1 if leap and ld > 15 else lm
+        if leap:
+            notes.append("生在闰%s月：紫微按%s月排（闰月十五以前算本月，以后算下月）" % (MONTHS[lm], MONTHS[zm]))
+        out["ziwei"] = ziwei((ly - 4) % 10, (ly - 4) % 12, zm, ld, hb)
+
+    # -- 星盘
+    west = {"bodies": [], "asc": None, "mc": None}
+    for b in BODIES:
+        lon = _lon(b, jde)
+        retro = b not in ("太阳", "月亮") and (_lon(b, jde + 0.5) - _lon(b, jde - 0.5) + 180) % 360 - 180 < 0
+        west["bodies"].append({"name": b, "lon": round(lon, 2), "sign": sign_deg(lon)[0], "deg": sign_deg(lon)[1],
+                               "retro": retro})
+    if not t:  # the Moon moves ~13° a day: say so when the day (or the slot he picked) spans two signs
+        h0, h1 = SLOTS.get(slot, (0, 24))
+        start = datetime.datetime.combine(d, datetime.time(h0))
+        ch = moon_change(_to_utc(start, tz)[0], _to_utc(start + datetime.timedelta(hours=h1 - h0), tz)[0])
+        if ch:
+            when = ch[2].replace(tzinfo=datetime.timezone.utc).astimezone(ZoneInfo(tz))
+            west["moon_alt"] = "月亮在%s或%s：当地时间约 %s 换座，要看几点出生" % (ch[0], ch[1], when.strftime("%H:%M"))
+            west["bodies"][1]["sign"] = ""
+    if t and pl:
+        ramc, eps, mc, asc = angles(jd_ut(utc), pl["lat"], pl["lon"])
+        cusps = houses(ramc, eps, pl["lat"], mc, asc)
+        west["asc"], west["mc"] = dict(zip(("sign", "deg"), sign_deg(asc))), dict(zip(("sign", "deg"), sign_deg(mc)))
+        west["cusps"] = [round(c, 2) for c in cusps]
+        for x in west["bodies"]:
+            x["house"] = house_of(x["lon"], cusps)
+    out["west"] = west
+    out["items"] = _items(out, slot, city)
+    out["sections"] = _sections(out, date, time or slot, city)
+    for p in (out["ziwei"] or {}).get("palaces", []):
+        p.pop("_main", None)
+    return out
+
+
+def _sign_word(x):
+    return "%s%d°" % (x["sign"], x["deg"])
+
+
+def _items(c, slot, city):
+    """The three portrait cards (占星 / 紫微 / 八字): label + text, in the page's voice."""
+    w, z, b = c["west"], c["ziwei"], c["bazi"]
+    sun, moon = w["bodies"][0], w["bodies"][1]
+    parts = ["太阳%s" % sun["sign"]]
+    if moon["sign"]:
+        parts.append("月亮%s" % moon["sign"])
+    if w["asc"]:
+        parts.append("上升%s" % w["asc"]["sign"])
+    say = []
+    if moon["sign"]:
+        say.append("月亮是私下的情绪：%s" % MOON_SAY[moon["sign"]])
+    if w["asc"]:
+        say.append("上升是别人第一眼看到的你：%s" % ASC_SAY[w["asc"]["sign"]])
+    text = "、".join(parts) + "。" + ("说法里，" + "；".join(say) + "。" if say else "")
+    if w.get("moon_alt"):
+        text += w["moon_alt"] + "。"
+    if city and not c["place"]:
+        text += "出生城市“%s”没认出来，换个写法试试（写城市名，比如“杭州”“浙江湖州”）。" % city
+    elif not w["asc"]:
+        text += "填上%s，能排出上升。" % "和".join(x for x, have in (("出生时间", c["time"]), ("出生城市", c["place"])) if not have)
+    elif c["place"]["approx"]:
+        text += "（出生城市按%s的位置估算。）" % c["place"]["name"]
+    astro = {"label": "占星 · " + " · ".join(parts[1:] or parts), "text": text}
+    if z:
+        ming = z["palaces"][0]
+        stars = [s[:2] for s in ming["main"]]
+        borrowed = not stars
+        if borrowed:
+            stars = [s[:2] for s in z["palaces"][6]["main"]]
+        head = ("命宫在%s，没有主星，借对宫的%s" if borrowed else "命宫在%s，主星%s") % (ming["branch"], "、".join(stars))
+        zi = {"label": "紫微斗数 · 命宫" + ("无主星，借%s" if borrowed else "%s") % "、".join(stars),
+              "text": "%s；身宫落在%s。说法里，%s。" % (head, z["shen_in"], "；".join(
+                  "%s是%s" % (s, STAR_SAY[s]) for s in stars))}
+    else:
+        zi = {"label": "紫微斗数 · 命宫", "text": "需要出生时间（几点几分）。" + ("只选了“%s”，定不了时辰。" % slot if slot else ""),
+              "miss": True}
+    wx = " ".join("%s%d" % kv for kv in b["wuxing"].items())
+    bz = {"label": "八字 · 日主%s · 生肖%s" % (b["dm"], c["animal"]),
+          "text": "%s（%s）。五行：%s%s。说法里，%s日主像%s。%s" % (
+              " ".join(b["pillars"]), "年月日时" if len(b["pillars"]) == 4 else "年月日，缺出生时间排不了时柱",
+              wx, "，缺" + b["missing"] if b["missing"] else "", b["dm"], DM_SAY[b["dm"][0]],
+              "（时辰按%s的真太阳时 %s 算%s。）" % (c["place"]["name"], c["solar"], "，23 点以后算第二天"
+                                              if c["solar"] >= "23:00" else "") if c.get("solar") else
+              "（没填出生城市，时辰按北京时间算。）" if c["time"] and not c["place"] else "")}
+    return {"astro": astro, "ziwei": zi, "bazi": bz}
+
+
+def _sections(c, date, time, city):
+    """The chart as text for the selves, one part per system (see chart_text): facts only, read straight off the chart."""
+    w, z, b = c["west"], c["ziwei"], c["bazi"]
+    head = ["【他的盘】程序按他填的资料排的（生日 %s%s%s）。他问起来就照这个说；这里没有的，不编。"
+            % (date, "，出生时间 " + time if time else "，没填出生时间", "，出生城市 " + city if city else "，没填出生城市")]
+    if c.get("solar"):
+        head.append("- 时辰按%s的真太阳时 %s 算。" % (c["place"]["name"], c["solar"]))
+    head.append("- 农历：%s。生肖%s。" % (c["lunar"], c["animal"]))
+    bazi = "- 八字（%s）：%s。日主%s。天干十神：%s。地支藏干：%s。五行（八字里的字数）：%s%s。年柱纳音%s。" % (
+        "年月日时" if len(b["pillars"]) == 4 else "年月日；没出生时间，没有时柱", " ".join(b["pillars"]), b["dm"],
+        "，".join(b["gods"]), "；".join(b["hidden"]), " ".join("%s%d" % kv for kv in b["wuxing"].items()),
+        "，缺" + b["missing"] if b["missing"] else "，五行都有", b["nayin"])
+    if z:
+        ming = z["palaces"][0]
+        ziwei = "- 紫微斗数：命宫在%s（%s），%s；身宫在%s，落在%s。%s。生年四化：%s。\n  十二宫：%s" % (
+            ming["branch"], ming["gz"], "主星" + "、".join(ming["main"]) if ming["main"] else
+            "没有主星（借对宫迁移宫的%s）" % "、".join(z["palaces"][6]["main"]), z["shen"], z["shen_in"], z["ju"], z["hua"],
+            "；".join("%s %s：%s" % (p["name"], p["gz"], "、".join(p["main"] + p["minor"]) or "无") for p in z["palaces"]))
+    else:
+        ziwei = "- 紫微斗数：没出生时间，排不了。"
+    parts = []
+    for x in w["bodies"]:
+        if not x["sign"]:
+            parts.append("月亮：" + w["moon_alt"])
+            continue
+        parts.append("%s %s%s%s" % (x["name"], _sign_word(x), " 第%d宫" % x["house"] if "house" in x else "",
+                                     "（逆行）" if x["retro"] else ""))
+    if w["asc"]:
+        parts += ["上升 " + _sign_word(w["asc"]), "天顶 " + _sign_word(w["mc"])]
+    west = "- 星盘（回归黄道%s）：%s。%s" % ("，Placidus 分宫" if w["asc"] else "", "；".join(parts),
+                                       "" if w["asc"] else "没有出生时间和出生城市，排不了上升和宫位。")
+    notes = "- 说明：" + "；".join(c["notes"]) + "。" if c["notes"] else ""
+    return {"head": "\n".join(head), "bazi": bazi, "ziwei": ziwei, "west": west, "notes": notes}
+
+
+def chart_text(c, parts=("bazi", "ziwei", "west")):
+    """The 【他的盘】 block with only the systems he is asking about: shown the whole chart, the selves read every part
+    of it out ("我八字是什么" got the 紫微 palaces and the planets too)."""
+    s = c["sections"]
+    return "\n".join(x for x in [s["head"]] + [s[p] for p in parts] + [s["notes"]] if x)

@@ -22,7 +22,7 @@ HOST=$MYLIFE_DEPLOY_HOST
 SSH_OPTS=(-p "$MYLIFE_DEPLOY_PORT" -i "$MYLIFE_DEPLOY_KEY" -o IdentitiesOnly=yes -o BatchMode=yes)
 SCP_OPTS=(-q -P "$MYLIFE_DEPLOY_PORT" -i "$MYLIFE_DEPLOY_KEY" -o IdentitiesOnly=yes)
 STAGE=/tmp/mylife-deploy
-SERVER_FILES="mylife_server.py memory.py voices.json calibrate.py"
+SERVER_FILES="mylife_server.py memory.py paipan.py voices.json calibrate.py"
 
 # Pages left open on phones are told about a new deploy through /build.txt (see BUILD in the page).
 BUILD=$(date -u +%Y%m%d-%H%M%S)
