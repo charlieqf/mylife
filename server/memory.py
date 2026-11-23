@@ -28,15 +28,16 @@ LEVELS = (3, 8, 16, 28, 45)  # score thresholds for how "formed" the other selve
 NEW_USER_LINE = "（你们刚认识，你还不知道他的任何事：不要提“上次”“上周”“那件事”这类往事。）"
 # How much to say when he brings something heavy or asks to be talked through it; grows with how well the selves
 # know him. (up to this level, hard cap in 字 that the server trims to, what the prompt asks for)
-DEPTH = ((1, 560, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。但了解得少，不妨碍把他刚说的这件事说透：他说起最近的样子、讲一件压着他的事、或要你开导时，就围着他的原话往深里说，三四小段，三四百字左右，最多五百字。"),
-         (3, 720, "你对他有些了解了：他讲一件压着他的事、要你开导时，说四五小段，不超过六百五十字；能连上他以前说过的就连上。"),
-         (5, 900, "你已经挺了解他了：他讲一件压着他的事、要你开导时，可以把话说透，不超过八百字；把这次说的事和他以前说过的事、他的习惯连起来。"))
+DEPTH = ((1, 900, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。但了解得少，不妨碍把他刚说的这件事说透：他带着情绪来、讲一件压着他的事、或要你开导时，就围着他的原话往深里说，先安慰，再分析，再化开，五六小段，六七百字左右，最多八百字。"),
+         (3, 1000, "你对他有些了解了：他带着情绪来、讲一件压着他的事、要你开导时，说五六小段，不超过九百字；能连上他以前说过的就连上。"),
+         (5, 1100, "你已经挺了解他了：他带着情绪来、讲一件压着他的事、要你开导时，可以把话说透，不超过一千字；把这次说的事和他以前说过的事、他的习惯连起来。"))
 
 
-# 伙伴 (pingzuo) sits with him rather than taking the thing apart: fewer, shorter paragraphs at every level.
-DEPTH_PINGZUO = ((1, 400, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。他讲一件压着他的事、要你开导时，陪他慢慢说两三段，两三百字，最多三百五十字。"),
-                 (3, 500, "你对他有些了解了：他讲一件压着他的事、要你开导时，陪他慢慢说三段左右，不超过四百五十字；能想起他以前说过的就轻轻提一句。"),
-                 (5, 620, "你已经挺了解他了：他讲一件压着他的事、要你开导时，陪他慢慢说，不超过五百五十字；可以想起他以前扛过的事、他的习惯。"))
+# 伙伴 (pingzuo) sits with him rather than taking the thing apart: a little shorter than 导师 at every level.
+# The client wants long, comforting replies "most of the time", so even a new user gets the full length; knowing him adds a little.
+DEPTH_PINGZUO = ((1, 680, "你们刚认识，你只知道他刚说的这些：不往外猜他的生活，不装作很懂他。他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说四五段，四五百字，最多六百字。"),
+                 (3, 780, "你对他有些了解了：他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说四五段，不超过七百字；能想起他以前说过的就轻轻提一句。"),
+                 (5, 880, "你已经挺了解他了：他带着情绪来、讲一件压着他的事、要你开导时，陪他慢慢说，不超过八百字；可以想起他以前扛过的事、他的习惯。"))
 
 
 def depth(lv, pid=None):

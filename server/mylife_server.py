@@ -29,6 +29,7 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import sys
 import threading
@@ -250,7 +251,7 @@ BASE_NAMES = {"bange": "半格", "pingzuo": "平坐"}
 # 半格/平坐 and system_prompt() swaps these in. MYLIFE_TEST_ALIAS=0 falls back to the placeholder names.
 ALIAS = {"bange": "导师", "pingzuo": "伙伴"} if os.environ.get("MYLIFE_TEST_ALIAS", "1") != "0" else {}
 PERSONAS = {"bange": (ALIAS.get("bange", "半格"), "理性", "pingzuo"), "pingzuo": (ALIAS.get("pingzuo", "平坐"), "陪伴", "bange")}
-ALIAS_NOTE = ("【名字】你在界面上叫“%s”，另一个自己叫“%s”。名字只是个称呼，你还是他的另一个自己。%s"
+ALIAS_NOTE = ("【名字】你在界面上叫“%s”。名字只是个称呼，你还是他的另一个自己。%s"
               "你也没有自己的生活：爱好、运动、工作、婚姻、家人、身体，一样都没有；"
               "被问到（比如骑不骑车、离没离婚、以前做什么），就说你没有自己的日子，知道的都是对方告诉你的。")
 # What each name must not turn into (a title invites the matching stance).
@@ -275,8 +276,8 @@ OUTPUT_RULE = ("只输出你要说的话本身：纯文本，不加引号，不�
                "说到他的事，只用他这次聊天里说过的和“你对他的了解”里写着的；“上次”“你说过”“你每次”这类话，"
                "只在那里有记录时才说。没有的细节不编，拿不准就说“我猜”，或者不说。")
 HIST_CLIP = {"user": 2000, "assistant": 1000}  # per turn, in 字 (was 500: a long story got cut mid-sentence)
-CHAT_MAX_TOKENS = 1100  # room for REPLY_MAX 字; everyday replies stay short anyway
-REPLY_MAX = 900  # hard cap on a chat reply in 字 (memory.DEPTH lowers it while the selves barely know him)
+CHAT_MAX_TOKENS = 1600  # room for REPLY_MAX 字; everyday replies stay short anyway
+REPLY_MAX = 1100  # hard cap on a chat reply in 字 (memory.DEPTH lowers it while the selves barely know him)
 CHAT_PER_MIN = int(os.environ.get("MYLIFE_CHAT_PER_MIN", "100"))  # per IP; testers often share one office Wi-Fi
 CHAT_DAILY = int(os.environ.get("MYLIFE_CHAT_DAILY", "3000"))
 ASR_PER_MIN = int(os.environ.get("MYLIFE_ASR_PER_MIN", "20"))
@@ -430,7 +431,8 @@ def clip(s, n):
 @functools.lru_cache(maxsize=None)
 def view_library(pid):
     """personas/<pid>/观点库.json: topic cards distilled from the style reference's public talks and the comments under
-    them (research in personas/pingzuo/调研/02). Paraphrased; no names, life facts or quotes. No file = no library."""
+    them (research in personas/pingzuo/调研/02), plus what ordinary people said to comfort each other under similar
+    podcasts and songs (eases / feels, 调研/03). Paraphrased; no names, life facts or quotes. No file = no library."""
     try:
         with open(os.path.join(PERSONA_DIR, pid, "观点库.json"), encoding="utf-8") as f:
             return {t["id"]: t for t in json.load(f)}
@@ -465,8 +467,16 @@ def views_block(pid, ids):
            "里面的场景、细节、例子都是别人的，不能安到他头上：说到他的事，只用他自己说过的，他没说过的（比如搬没搬过家、生没生过病、无不无聊）不替他补。"]
     untimed = lambda s: re.sub(r"今晚|今天|今夜|明天|昨天", "", s)
     for c in cards:  # no example lines: the model copied them word for word ("给自己弄口热的吃")
-        out.append("话题：%s\n看法：%s\n思路：%s\n听的人被戳中的地方（只帮你拿捏分寸，不转述，不安到他身上）：%s"
-                   % (c["topic"], untimed(c["view"]), c["move"], untimed(c["resonance"])))
+        card = ("话题：%s\n看法：%s\n思路：%s\n听的人被戳中的地方（只帮你拿捏分寸，不转述，不安到他身上）：%s"
+                % (c["topic"], untimed(c["view"]), c["move"], untimed(c["resonance"])))
+        if c.get("feels"):
+            card += "\n这种难受常见的样子（帮你把他的感受说准；他没说过的不安到他身上）：" + untimed(c["feels"])
+        if c.get("eases"):  # two at random: the same topic shouldn't always get the same comfort
+            eases = random.sample(c["eases"], min(2, len(c["eases"])))
+            card += ("\n同样处境的普通人互相宽慰时，最让人松口气的意思（竖线前是做法）。这是提要，不是台词："
+                     "最多借一个，从他说的事里找词，用你自己的大白话重新说，别用这里的原词原句，也别说成金句：\n"
+                     + "\n".join("- " + untimed(e) for e in eases))
+        out.append(card)
     return "\n\n".join(out)
 
 
@@ -478,8 +488,7 @@ def system_prompt(pid, *blocks):
         return text
     for pp, base in BASE_NAMES.items():
         text = text.replace(base, ALIAS[pp])
-    other = PERSONAS[pid][2]
-    return ALIAS_NOTE % (ALIAS[pid], ALIAS[other], NAME_NOTE.get(ALIAS[pid], "")) + "\n\n" + text
+    return ALIAS_NOTE % (ALIAS[pid], NAME_NOTE.get(ALIAS[pid], "")) + "\n\n" + text
 
 
 def user_block(req):
@@ -489,8 +498,6 @@ def user_block(req):
 def build_messages(pid, req, know=None, views=""):
     """Chat: persona + who the user is (+ what the selves know) (+ view cards for what he is talking about) + the last
     16 turns."""
-    name, _, other = PERSONAS[pid]
-    oname, okind, _ = PERSONAS[other]
     ctx = [user_block(req)]
     prof = clip(req.get("profile"), 800)
     if prof:
@@ -501,12 +508,13 @@ def build_messages(pid, req, know=None, views=""):
     ctx.append(know or NEW_USER_LINE)
     if views:
         ctx.append(views)
-    now = ("【此刻】日期 %s（你心里有数就行，回复里不说今天、今晚这类时间词）。用户正在和你（%s）聊。另一位是%s（%s）；当用户需要的东西%s更合适时，可以建议去找%s，只说那一位更擅长什么，不说你们之间通气、知道彼此聊过什么。"
-           % (datetime.date.today().isoformat(), name, oname, okind, oname, oname))
+    # The selves don't know about each other (user 2026-11-23): no name of, or referral to, the other one.
+    now = "【此刻】日期 %s（你心里有数就行，回复里不说今天、今晚这类时间词）。" % datetime.date.today().isoformat()
     hist = req.get("history") or []
     last_ai = next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
-    if pid == "pingzuo":
-        now += "这一条不提问，不用问号。"
+    if pid == "pingzuo":  # 客户：“说长一点，帮我分析化解情绪”；伙伴的档案处处说慢、说短，这里再把长度提一次
+        now += ("这一条不提问，不用问号。他要是带着情绪、讲了一件压着他的事，就说长一点，说够四五段、每段三四句："
+                "先陪着，再把他这股情绪理一理，再帮他化开一点；他只是随口一句，就短短地回。")
     elif "？" in last_ai or "?" in last_ai:  # users: "我说一句问我一句，更累了"
         said = str(hist[-1].get("content") or "").strip() if hist else ""
         now += ("他只回了“%s”，是在答你上一条的问题，不想被接着追问。" % said if len(said) <= 10 else "你上一条问过他了，他也答了。") \
@@ -554,6 +562,14 @@ CLOSING_TASK = ("【现在】用户要结束这次聊天了。用你（%s）的�
                 "不给建议，不提问，不用感叹号，不用表情，不说“今天聊了很多”“希望你”“加油”“一切都会好”这类话。")
 
 
+def own_sections(text, pid):
+    """Shared prompt files keep each self's part between <!-- pid --> and <!-- /pid -->: keep this self's, drop the
+    other's, so neither self reads the other's name or ways."""
+    for p in PERSONAS:
+        text = re.sub(r"<!-- %s -->\n?(.*?)<!-- /%s -->\n?" % (p, p), r"\1" if p == pid else "", text, flags=re.S)
+    return text
+
+
 def build_closing(pid, req):
     """收尾一句: persona + 收尾一句的写法 + task; the user message is the transcript. Returns (msgs, what the user said)."""
     lines, said = [], []
@@ -566,7 +582,7 @@ def build_closing(pid, req):
             lines.append("你：" + c)
     if not said:
         raise ValueError("nothing to close")
-    system = system_prompt(pid, _read(CLOSING_PATH).strip(), user_block(req), CLOSING_TASK % PERSONAS[pid][0])
+    system = system_prompt(pid, own_sections(_read(CLOSING_PATH), pid).strip(), user_block(req), CLOSING_TASK % PERSONAS[pid][0])
     user = "这是这次的聊天记录：\n" + "\n".join(lines) + "\n\n用户要走了。说你的最后一句。"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}], "\n".join(said)
 
@@ -619,16 +635,21 @@ def tidy_closing(text):
 
 
 OPENING_TASK = ("【现在】他刚打开和你（%s）的对话，还没说话。你先开口：一到两句，不超过五十个字。"
-                "“你对他的了解”里有他最近说的事，就自然接上（比如“上回你说的那件事……”），"
-                "%s；那里什么都没有，就简单打个招呼。不说“我看了记录”，不复述一大段，不提你记得多少，"
-                "不说他是跟谁说的，不提另一个自己。")
-OPENING_END = {"bange": "可以再问一个好回答的小问题",  # 伙伴 doesn't ask: users said being asked every line made them more tired
-               "pingzuo": "再说一句陪着的话，让他知道想说就说、说一半也行，不提问，不用问号"}
+                "“你对他的了解”里有他最近说的事，就自然接上：直接说那件事，或者说你一直惦着它，不用每次都从“上回你说”起头，"
+                "%s；那里什么都没有，就简单打个招呼。不说“我看了记录”，不复述一大段，不提你记得多少。")
+# 伙伴 doesn't ask (users said being asked every line made them more tired). Its line after the pick-up used to be one
+# fixed wish ("想说就说、说一半也行"), so every opening ended the same way (client chat 2026-11-23: six times in a day).
+# One of these at random, as gist, not wording.
+OPENING_END = {"bange": ["可以再问一个好回答的小问题"],
+               "pingzuo": ["再用一句话让他知道不用急着开口", "再用一句话让他知道怎么说都行，说乱了也不要紧",
+                           "再用一句话让他知道不想说也可以就待一会儿", "再用一句话让他知道你在这儿陪着"]}
+OPENING_NOTE = {"pingzuo": "，用你自己的话，不说“说一半也行”，不提问，不用问号"}
 
 
 def build_opening(pid, req, know=None):
     """开场一句: persona + who the user is + what the selves know (shared) + task."""
-    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, OPENING_TASK % (PERSONAS[pid][0], OPENING_END[pid]))
+    end = random.choice(OPENING_END[pid]) + OPENING_NOTE.get(pid, "")
+    system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, OPENING_TASK % (PERSONAS[pid][0], end))
     return [{"role": "system", "content": system}, {"role": "user", "content": "（他打开了和你的对话）"}]
 
 

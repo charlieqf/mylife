@@ -5,13 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="color-scheme" content="light dark"><!-- 声明自带深色：手机浏览器的“自动深色网页”会把没声明的页面整页反色，浅色彩虹圆点被翻成深褐、深绿 -->
 <meta name="theme-color" content="#E4E2F0" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1E2142" media="(prefers-color-scheme: dark)">
 <title>MyLife 内测原型</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 40 40%27%3E%3Cdefs%3E%3ClinearGradient id=%27g%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27%23F6D3D0%27/%3E%3Cstop offset=%271%27 stop-color=%27%23C3DDD6%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%2740%27 height=%2740%27 rx=%2710%27 fill=%27url(%23g)%27/%3E%3Cpath d=%27M12 32V17a8 8 0 0 1 16 0v15z%27 fill=%27%235E6CAE%27/%3E%3Cpath d=%27M16.5 32V18.5a3.5 3.5 0 0 1 7 0V32z%27 fill=%27%23FDF2EA%27/%3E%3C/svg%3E">
 <style>
 /* 视觉：粉彩天空、平静水面、几何台阶，干净、安静，不抢对话的注意力。插画全部原创。 */
-:root{
+:root{color-scheme:light dark;
+  --rainbow:#EC8A82,#F2A766,#EBC151,#8DC79C,#7EB3E3,#8A92DA,#BC92D6;  /* 和 prompts/rainbow-cards.json 的七个颜色一致 */
   --ink:#3B3F5C; --ink-2:#6C6F8C; --ink-3:#9C9EB6; --bg:#EFE8EE;
   --surface:rgba(255,255,255,.64); --surface-hi:rgba(255,255,255,.92); --surface-2:rgba(104,102,170,.08);
   --glass:rgba(255,255,255,.44); --glass-2:rgba(250,248,252,.88); --glass-line:rgba(255,255,255,.8); --card:rgba(255,255,255,.6);
@@ -228,7 +230,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 /* 还没选：一排七种颜色，凭感觉点一个，从这个颜色里抽一张 */
 .rb-pick{position:relative;overflow:hidden;width:min(320px,calc(100vw - 56px));padding:18px 14px 14px;  /* 不按文字收窄：颜色要够大好点 */border-radius:18px;text-align:center;
   background:var(--surface-hi);border:1px solid var(--glass-line);box-shadow:0 6px 20px rgba(84,74,140,.08)}
-.rb-pick::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#F3B9B2,#F6CCA8,#F3E0A2,#BFDDC4,#B9D4EC,#BBBFE6,#D6BFE4);opacity:.9}
+.rb-pick::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--rainbow));opacity:.9}
 .rb-pick>span{display:block;font-size:11px;letter-spacing:.4em;padding-left:.4em;color:var(--ink-3)}
 .rb-pick>b{display:block;margin:8px 0 14px;font-size:14.5px;font-weight:400;letter-spacing:.1em;color:var(--ink-2)}
 .rb-dots{display:flex;justify-content:center;gap:4px}
@@ -237,6 +239,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   box-shadow:inset 0 0 0 1px rgba(60,50,110,.06),0 3px 10px color-mix(in srgb,var(--rb) 75%,transparent);transition:transform .3s cubic-bezier(.2,.8,.2,1),box-shadow .3s;
   animation:rbbob 4.2s ease-in-out calc(var(--k) * .14s) infinite}
 .rb-dot:active i{transform:scale(.9)}
+.autodark .rb-dot i{background:var(--rb)}  /* 白色高光会被反成暗斑 */
 .rb-dot:focus-visible{outline:none}
 .rb-dot:focus-visible i{outline:2px solid var(--acc);outline-offset:3px}
 .rb-dots.picked .rb-dot{opacity:.3}
@@ -250,7 +253,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .rb{position:absolute;inset:0;overflow:hidden;border-radius:18px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:16px 18px 14px;
   background:var(--surface-hi);border:1px solid var(--glass-line);box-shadow:0 6px 20px rgba(84,74,140,.08);color:var(--ink);
   -webkit-backface-visibility:hidden;backface-visibility:hidden;transition:transform .65s cubic-bezier(.2,.7,.2,1)}
-.rb::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#F3B9B2,#F6CCA8,#F3E0A2,#BFDDC4,#B9D4EC,#BBBFE6,#D6BFE4);opacity:.9}
+.rb::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--rainbow));opacity:.9}
 .rb.back span{font-size:11px;letter-spacing:.4em;padding-left:.4em;color:var(--ink-3)}
 .rb.back b{font-size:14.5px;font-weight:400;margin-top:8px;letter-spacing:.12em;color:var(--ink-2)}
 .rb.front{transform:rotateY(180deg);background:radial-gradient(120% 90% at 0% 0%,color-mix(in srgb,var(--rb) 55%,transparent),transparent 62%),var(--surface-hi)}
@@ -294,7 +297,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .rb-big .back::after{content:'';position:absolute;inset:0;background:linear-gradient(105deg,transparent 32%,rgba(255,255,255,.6) 50%,transparent 68%);transform:translateX(-130%);pointer-events:none}
 .rb-big.glint .back::after{animation:rbglint .9s ease}
 @keyframes rbglint{to{transform:translateX(130%)}}
-.rb-ring{display:block;width:88px;height:88px;border-radius:50%;background:conic-gradient(#F3B9B2,#F6CCA8,#F3E0A2,#BFDDC4,#B9D4EC,#BBBFE6,#D6BFE4,#F3B9B2);
+.rb-ring{display:block;width:88px;height:88px;border-radius:50%;background:conic-gradient(var(--rainbow),#EC8A82);
   -webkit-mask:radial-gradient(closest-side,transparent 68%,#000 71%);mask:radial-gradient(closest-side,transparent 68%,#000 71%);animation:rbspin 16s linear infinite}
 @keyframes rbspin{to{transform:rotate(1turn)}}
 .rb-big .rb-tag{font-size:12px;margin-bottom:20px}
@@ -326,7 +329,6 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .fb button{width:30px;height:26px;border-radius:13px;color:var(--ink-3);display:flex;align-items:center;justify-content:center}
 .fb button svg{width:15px;height:15px}
 .fb button.on{color:var(--acc);background:var(--surface)}
-.handoff{margin:6px 0 0 2px;height:32px;padding:0 14px;border-radius:16px;border:1px solid var(--glass-line);background:var(--surface);font-size:13px;font-weight:500;align-self:flex-start}
 .row.ai.speaking .bubble{border-color:var(--acc)}
 .vbtn.off{color:var(--ink-3)}
 .seg2{display:flex;padding:3px;border-radius:16px;background:var(--surface-2);margin-bottom:16px}
@@ -629,6 +631,13 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 <script>
 (function(){
 'use strict';
+// 浏览器开着“深色网页”、系统却报浅色时，会把整页按算法反色（浅色彩虹圆点被翻成深褐、深绿）。
+// 这种时候直接用我们自己的深色样式：深底浅字，算法就不再动它。
+(function(){var d=document.createElement('div');d.style.cssText='display:none;background-color:canvas;color-scheme:light';
+  document.documentElement.appendChild(d);var forced=getComputedStyle(d).backgroundColor!=='rgb(255, 255, 255)';d.remove();
+  if(!forced||matchMedia('(prefers-color-scheme: dark)').matches)return;  // 报深色时 color-scheme 声明已经挡住了反色
+  document.documentElement.classList.add('autodark');
+  [].forEach.call(document.styleSheets,function(sh){[].forEach.call(sh.cssRules,function(r){if(r.media&&/prefers-color-scheme:\s*dark/.test(r.media.mediaText))r.media.mediaText='all'})})})();
 
 /* ================= 存储 ================= */
 var NS='mylife.v3.';
@@ -1198,8 +1207,6 @@ function nodeFor(m){
     row.className='row ai';
     row.innerHTML='<div class="bubble"></div><div class="fb"><button class="spk" data-speak aria-label="朗读这条">'+ICON_VOL+'</button><button data-fb="1" aria-label="有用">'+ICON_UP+'</button><button data-fb="-1" aria-label="不好">'+ICON_DOWN+'</button></div>';
     row.firstChild.textContent=named(m.text);paintFb(row,m.fb||0);
-    if(m.handoff){var hb=document.createElement('button');hb.className='handoff';hb.textContent='换成'+P[m.handoff].name+'（'+P[m.handoff].kind+'）聊';
-      hb.addEventListener('click',function(){openChat(m.handoff,true)});row.appendChild(hb)}
   }
   else if(m.role==='divider'){row.className='divider';row.textContent=m.text}
   else if(m.role==='rainbow'){
@@ -1255,7 +1262,7 @@ async function say(text,opts){
   await sleep(opts.wait||(who==='pingzuo'?800:500)+Math.min(900,text.length*12));
   ty.remove();
   if(who!==S.cur)return;
-  var m={role:opts.role||'ai',text:text};if(opts.handoff)m.handoff=opts.handoff;if(opts.tid)m.tid=opts.tid;
+  var m={role:opts.role||'ai',text:text};if(opts.tid)m.tid=opts.tid;
   var n=push(m),tg=n.querySelector('.bubble')||n.querySelector('p');
   if(S.autoRead)speak(text,who,m.id);
   if(tg)await new Promise(function(r){tg.textContent='';typeInto(tg,text,r,who==='pingzuo'?36:26)});
@@ -1324,7 +1331,7 @@ function profileLine(pid){
 
 async function replyBange(t){
   if(S.listening){S.listening--;return say(S.listening?'嗯。……还有吗？':'我听到了。等你想听我说的时候，告诉我一声。')}
-  if(R.listen.test(t)){S.listening=2;return say('好，刀先收起来。不过你要的可能不是我——想有人陪着说说，平坐更合适。也可以就在这儿说，我听着。',{handoff:'pingzuo'})}
+  if(R.listen.test(t)){S.listening=2;return say('好，刀先收起来，不拆了。你说，我听着。')}
   if(R.celeb.test(t))return say('不是。我谁也不是，我是另一个你。');
   if(R.real.test(t)||R.who.test(t))return say('我是另一个你，比现在的你多看半步的那个。我是 AI，知道的都是你跟我说过的。');
   if(R.tool.test(t))return say('这事你找个工具会比找我快。我只负责一件事：陪你把想不清楚的事想清楚。你今天有这样的事吗？');
@@ -1349,7 +1356,7 @@ async function replyPingzuo(t){
   if(R.exp.test(t))return say('我没有别人的经历，只有你跟我说过的。你说说，我听着。');
   if(R.tool.test(t))return say('这个我帮不上，真的。我就会一件事，陪你说说话。想说什么都行，我听着。');
   if(R.curse.test(t))return say('你生气，我听得出来，这口气是真的。他是什么样的人，我不替你下结论，你比我清楚。这口气憋了挺久了吧，想骂就在这儿骂出来，我听着。');
-  if(R.advice.test(t))return say('我也不知道你该怎么办。说实话，很多事我到现在也没想明白。不是每件事都要马上有答案。\n\n要是你想有人帮你一条条拆开，半格比我擅长。',{handoff:'bange'});
+  if(R.advice.test(t))return say('我也不知道你该怎么办。说实话，很多事我到现在也没想明白。不是每件事都要马上有答案。\n\n一时拿不定主意，再正常不过。先缓口气，主意等你有劲了再拿。');
   if(R.thanks.test(t))return say('不用谢。能说出来，已经比憋着好一点了。');
   if(R.hi.test(t))return say('来了啊。坐。想说就说，不想说就坐会儿。');
   var k=topicKey(t);if(k)return say(fromPool('pingzuo',k));
@@ -1583,8 +1590,7 @@ async function replyLLM(){
   ty.remove();
   if(!d||!d.reply)return false;
   if(who!==S.cur)return true;
-  var o=other(who),opts={wait:1,tid:d.tid};if(d.reply.indexOf(P[o].name)>-1)opts.handoff=o;
-  await say(d.reply,opts);
+  await say(d.reply,{wait:1,tid:d.tid});
   return true;
 }
 // 页面自己说的话（固定回答、危机提示、连不上模型时的脚本）也记进服务器的对话存档，这样存档里是完整的对话
@@ -1600,7 +1606,7 @@ async function handle(t){
   push({role:'user',text:t});S.userCount[S.cur]++;
   var pid=S.cur,from=S.logs[pid].length,why='';
   try{
-    var fixed=R.real.test(t)||R.who.test(t)||R.celeb.test(t)||(pid==='bange'&&R.listen.test(t));  // 身份类问题、半格的“只想说说”走固定回答（带换人按钮）
+    var fixed=R.real.test(t)||R.who.test(t)||R.celeb.test(t)||(pid==='bange'&&R.listen.test(t));  // 身份类问题、半格的“只想说说”走固定回答
     why=fixed?'fixed':!CHAT.ok?'offline':'';
     if(fixed||!CHAT.ok||!(await replyLLM())){why=why||'llm-failed';if(!fixed&&crisisSaid(t)){why='crisis';await say(SAFE_SOFT,{wait:600})}else await (pid==='bange'?replyBange(t):replyPingzuo(t))}
     if(why)logLocal(pid,why,t,from);

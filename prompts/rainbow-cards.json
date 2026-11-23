@@ -1,13 +1,13 @@
 {
   "note": "MyLife 彩虹卡（原创，草稿 v1，2026-11-21）。七种颜色各 7 张，颜色只代表话题，不讲脉轮、不占卜。t = 卡面短句；q = 模型连不上时的备用开场问题。",
   "colors": [
-    {"key": "red", "name": "红", "theme": "身体", "hex": "#F3B9B2"},
-    {"key": "orange", "name": "橙", "theme": "情绪", "hex": "#F6CCA8"},
-    {"key": "yellow", "name": "黄", "theme": "自己", "hex": "#F3E0A2"},
-    {"key": "green", "name": "绿", "theme": "关系", "hex": "#BFDDC4"},
-    {"key": "blue", "name": "蓝", "theme": "说出口", "hex": "#B9D4EC"},
-    {"key": "indigo", "name": "靛", "theme": "想法", "hex": "#BBBFE6"},
-    {"key": "violet", "name": "紫", "theme": "往后", "hex": "#D6BFE4"}
+    {"key": "red", "name": "红", "theme": "身体", "hex": "#EC8A82"},
+    {"key": "orange", "name": "橙", "theme": "情绪", "hex": "#F2A766"},
+    {"key": "yellow", "name": "黄", "theme": "自己", "hex": "#EBC151"},
+    {"key": "green", "name": "绿", "theme": "关系", "hex": "#8DC79C"},
+    {"key": "blue", "name": "蓝", "theme": "说出口", "hex": "#7EB3E3"},
+    {"key": "indigo", "name": "靛", "theme": "想法", "hex": "#8A92DA"},
+    {"key": "violet", "name": "紫", "theme": "往后", "hex": "#BC92D6"}
   ],
   "cards": [
     {"id": "r1", "c": "red", "t": "累了，可以先停一下。", "q": "最近一次真正歇下来，是什么时候？"},
