@@ -491,6 +491,24 @@ def chart_parts(said):
     return [k for k, p in CHART_PARTS.items() if p.search(said)] or list(CHART_PARTS)
 
 
+# Stock endings (user 2026-11-24 "结尾的固定套路要优化一下": 伙伴 ended 54% of replies with 我在这儿 / 想哭就哭 /
+# 喝口热的, 导师 kept coming back to 先别急着…… / 怎么定，是你的; after one such ending the next reply usually repeated it).
+END_TICS = re.compile(r"我(?:就|一直)?在(?:这儿|这里|呢)|我在。|我陪(?:着)?你|陪你(?:待|坐)|想哭就哭|喝[口点杯]?热|热水|热乎|洗把脸"
+                      r"|睡一觉|早点睡|缓一缓|歇会儿|别(?:跟|和)自己较劲|先别(?:急着|逼自己)|怎么定，?是你的|一件小事|眼下(?:能做|先|就)"
+                      r"|只有一件|不用(?:马上)?逼自己|难受就难受")
+
+
+def used_endings(hist):
+    """Stock phrases this self already ended a reply with in this visit (most recent first)."""
+    seen = []
+    for h in reversed(hist):
+        paras = [p for p in str(h.get("content") or "").split("\n") if p.strip()] if h.get("role") != "user" else []
+        for m in END_TICS.finditer(paras[-1] if paras else ""):
+            if m.group() not in seen:
+                seen.append(m.group())
+    return seen[:4]
+
+
 def birth_chart(birth):
     """The page's birth fields {date, time, slot, city} -> paipan.chart (cached), or None when there is no usable date."""
     if not isinstance(birth, dict) or not birth.get("date"):
@@ -586,7 +604,9 @@ def build_messages(pid, req, know=None, views=""):
     """Chat: persona + who the user is (+ what the selves know) (+ view cards for what he is talking about) + the last
     16 turns."""
     ctx = [user_block(req)]
-    prof = clip(req.get("profile"), 800)
+    # The page writes the summary to him ("你习惯边说边想……"); handed over like that, the selves quoted it back as something
+    # he had said ("你上回说过，你习惯边说边想"). Third person makes it a description, not his words.
+    prof = clip(req.get("profile"), 800).replace("你", "他")
     if prof:
         ctx.append("性格画像（他填的资料推出来的，只当线索，不当结论；不是他跟你说过的话，别说成“你提过”“你说过”；"
                    "不要逐条复述，也不要主动提星座、MBTI 这些词，除非对方先提）：\n" + prof)
@@ -609,6 +629,9 @@ def build_messages(pid, req, know=None, views=""):
     now = "【此刻】日期 %s（你心里有数就行，回复里不说今天、今晚这类时间词）。" % datetime.date.today().isoformat()
     if astro:
         now += ASTRO_NOTE
+    tics = used_endings(hist)
+    if tics:
+        now += "你前面已经拿“%s”收过尾了，这条别再这么收，也别换个说法说同一个意思。" % "”“".join(tics)
     if pid == "pingzuo":  # 客户：“说长一点，帮我分析化解情绪”；伙伴的档案处处说慢、说短，这里再把长度提一次
         now += "这一条不提问，不用问号。" + ("" if astro else
                "他要是带着情绪、讲了一件压着他的事，就说长一点，说够四五段、每段三四句："
