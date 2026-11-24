@@ -160,9 +160,12 @@ def replay(args):
 
     def one(r):
         users = [h.get("content", "") for h in r["hist"][-6:] if h.get("role") == "user"]
-        vids = srv.pick_views(r["p"], users, lambda m: srv.complete(m, 20, 0, 8)[0])
+        ask = lambda m: srv.complete(m, 20, 0, 8)[0]
+        vids = srv.pick_views(r["p"], users, ask)
+        last_ai = next((h.get("content", "") for h in reversed(r["hist"]) if h.get("role") != "user"), "")
+        move = srv.pick_move(r["p"], users, last_ai, [], ask)
         req = {"nick": r.get("nick") or "朋友", "history": r["hist"], "profile": r.get("profile"), "birth": r.get("birth")}
-        msgs = srv.build_messages(r["p"], req, r.get("know"), srv.views_block(r["p"], vids))
+        msgs = srv.build_messages(r["p"], req, r.get("know"), srv.views_block(r["p"], vids), move)
         text, model = srv.complete(msgs, srv.CHAT_MAX_TOKENS, timeout=40)
         return srv.postprocess(msgs[-1]["content"], srv.fit(text, r.get("cap") or srv.REPLY_MAX))
 

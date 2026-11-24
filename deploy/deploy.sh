@@ -37,7 +37,7 @@ scp "${SCP_OPTS[@]}" "$PAGE" "$HOST:$STAGE/mylife-prototype.html"
 
 # Persona prompts (档案 + 风格示例 + 观点库) and everything in prompts/ (另一个你, 去AI味, 收尾一句, 彩虹卡).
 # The service is restarted below, so the server picks them up (it caches them after the first read).
-tar -czf - personas/*/人格档案.md personas/*/风格示例.md $(ls personas/*/观点库.json 2>/dev/null) prompts | ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $STAGE/content && tar -xzf - -C $STAGE/content"
+tar -czf - personas/*/人格档案.md personas/*/风格示例.md $(ls personas/*/观点库.json personas/*/路子.json 2>/dev/null) prompts | ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $STAGE/content && tar -xzf - -C $STAGE/content"
 
 if [ "${1:-}" = "--secrets" ]; then
   ssh "${SSH_OPTS[@]}" "$HOST" 'umask 027; cat > /etc/mylife/secrets.env.new && chown root:mylife /etc/mylife/secrets.env.new && chmod 640 /etc/mylife/secrets.env.new && mv /etc/mylife/secrets.env.new /etc/mylife/secrets.env' < .secrets/mylife.env

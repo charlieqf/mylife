@@ -329,6 +329,43 @@ def drop_other_self(pid, reply, said=""):
     return drop_sentences(reply, "|".join(names)) if re.search("|".join(names), reply) else reply
 
 
+COPY_LIMIT = 0.5  # share of a reply's 4-character pieces already in one earlier reply
+REWRITE_NOTE = "【重写】你刚写的回复跟你前面说过的一条几乎一样。他不需要再看一遍同样的话：换个角度、换个说法重新回他，前面说过的不再说。"
+REPEAT_NOTE = ("他把前面说过的一句又原样发了一遍：可能是觉得你上次没说到点上，或者想听你换个说法。"
+               "别照着你上次的回答再说一遍，换个角度、换个说法重新回他。")
+
+
+def grams4(text):
+    t = re.sub(r"\s", "", text or "")
+    return {t[i:i + 4] for i in range(len(t) - 3)}
+
+
+def overlap(text, earlier):
+    """How much of `text` is already in `earlier` (0..1), by 4-character pieces."""
+    a = grams4(text)
+    return len(a & grams4(earlier)) / len(a) if a else 0.0
+
+
+def same_line(a, b):
+    norm = lambda s: re.sub(r"[\s，。！？、,.!?…~～]", "", str(s or ""))
+    return len(norm(a)) >= 6 and norm(a) == norm(b)
+
+
+HARD_END = re.compile(r"我(?:就|一直)?在(?:这儿|这里|呢)|我在[。！]|我陪(?:着)?你|陪你(?:待|坐)|想哭就哭|喝[口点杯]?热|早点睡|洗把脸")
+
+
+def drop_stock_end(reply):
+    """A long chat reply doesn't end on a stock line (我陪你, 想哭就哭, 喝口热的): told not to in the prompt, the selves
+    still did (real user 2026-11-24: "回答还是比较公式化"). Short replies ("嗯，我在。") keep theirs."""
+    paras = [p.strip() for p in reply.split("\n") if p.strip()]
+    if len(paras) < 2:
+        return reply
+    keep = "".join(x for x in re.findall(r"[^。！？]+[。！？]?", paras[-1]) if not HARD_END.search(x)).strip()
+    if len(keep) == len(paras[-1]):
+        return reply
+    return "\n\n".join(paras[:-1] + ([keep] if keep else []))
+
+
 def postprocess(user_text, reply, recent=None, told=False, pid=None):
     """recent = his last few lines (chat only). When none of them is an explicit wish to die, sentences that bring up the
     hotline or self-harm are dropped. When his line is one, one soft line is added, once per chat (told = said before).
@@ -341,6 +378,8 @@ def postprocess(user_text, reply, recent=None, told=False, pid=None):
     if len(reply) > 1 and reply[0] in "“\"" and reply[-1] in "”\"" and not re.search("[“”\"]", reply[1:-1]):
         reply = reply[1:-1].strip()  # the model wrapped the whole reply in quotes; a quote that opens a sentence stays
     reply = re.sub(r'"([^"\n]{1,60})"', r"“\1”", reply)  # 中文里的成对半角引号换成全角
+    if pid and recent is not None:
+        reply = drop_stock_end(reply)
     if CRISIS.search(user_text or ""):
         if not told and "12356" not in reply:
             reply += "\n\n" + SAFETY_LINE
@@ -475,7 +514,11 @@ ASTRO = re.compile(r"星座|星盘|水逆|合盘|占星|宫位|十二宫|血型|
                    r"|(?:太阳|月亮|上升|金星|火星|水星)(?:星座|在|落|是)?(?:%s)" % (_SIGN, _SIGN)
                    + r"|(?:月亮|上升)(?:和|跟|与|、)?(?:上升|月亮|太阳)|(?:月亮|上升)(?:星座)?(?:是|在)(?:什么|啥|哪)"
                    r"|运势|大运|流年|身宫|四化|化[禄权科忌]|十神|喜用|用神|纳音|日元"
-                   r"|第?[一二三四五六七八九十]{1,2}宫(?![殿廷])|在(?:几|哪个?|哪一)宫")
+                   r"|第?[一二三四五六七八九十]{1,2}宫(?![殿廷])|在(?:几|哪个?|哪一)宫"
+                   # follow-ups a tester sent mid-chart (2026-11-24) that went undetected, so the chart and the no-prediction
+                   # rule were missing and the self made up pillars and a health forecast
+                   r"|转运|走运|运气|本命年|出生时间|生辰|几点(?:出)?生|出生(?:在|于|是)?(?:凌晨|早上|上午|中午|下午|傍晚|晚上|夜里)?\d"
+                   r"|(?:19|20)?\d{2}年(?:会|能|怎|运|好不好|顺)")
 
 
 CHART_PARTS = {
@@ -486,9 +529,10 @@ CHART_PARTS = {
                        r"|" + _SIGN)}
 
 
-def chart_parts(said):
-    """Which of his charts he is asking about; all three for 排盘, 算命, 命理 and the like."""
-    return [k for k, p in CHART_PARTS.items() if p.search(said)] or list(CHART_PARTS)
+def chart_parts(last):
+    """Which of his charts his last line asks about; all three when it names none (运势, 转运, a birth time, 27年会怎样):
+    given only the planets, the self worked out the 八字 itself and got the pillars wrong."""
+    return [k for k, p in CHART_PARTS.items() if p.search(last)] or list(CHART_PARTS)
 
 
 # Stock endings (user 2026-11-24 "结尾的固定套路要优化一下": 伙伴 ended 54% of replies with 我在这儿 / 想哭就哭 /
@@ -496,6 +540,22 @@ def chart_parts(said):
 END_TICS = re.compile(r"我(?:就|一直)?在(?:这儿|这里|呢)|我在。|我陪(?:着)?你|陪你(?:待|坐)|想哭就哭|喝[口点杯]?热|热水|热乎|洗把脸"
                       r"|睡一觉|早点睡|缓一缓|歇会儿|别(?:跟|和)自己较劲|先别(?:急着|逼自己)|怎么定，?是你的|一件小事|眼下(?:能做|先|就)"
                       r"|只有一件|不用(?:马上)?逼自己|难受就难受")
+
+
+# How a follow-up reply goes, picked at random so consecutive replies don't share one shape. Length still follows
+# what he said (de-ai-style rule 1): a new layer of the story still gets said through.
+FOLLOW_SHAPES = {
+    "pingzuo": ["这一条就抓他刚才那句里的一个词或一个画面，往里说", "这一条说说你自己听到这儿心里是什么滋味，再说一句只对他成立的话",
+                "这一条短一点，两三句，像坐在旁边随口接一句", "这一条跟他一起看那件事里的一个细节，不急着安慰"],
+    "bange": ["这一条只给一个判断，把理由说清楚", "这一条换个角度，从那件事的另一头、或者那个人那边看一眼",
+              "这一条短一点，一两句点破就行", "这一条把他这句里最要紧的那个词拿出来，说准它"],
+}
+
+# Devices that turn into a template when every reply uses them (real replies 2026-11-24: "不是……是……" in 83%).
+TICS = {"不是……是……": re.compile(r"不是[^。！？\n]{0,24}?[，,]?(?:而)?是"), "我猜": re.compile(r"我猜"),
+        "换谁都……": re.compile(r"换(?:谁|成谁|了谁|个人)"), "说真的": re.compile(r"说真的|说实话"),
+        "先别急着……": re.compile(r"先别急着"), "不用逼自己……": re.compile(r"不用(?:马上)?逼自己|别逼自己"),
+        "……很正常": re.compile(r"(?:太|很|再)正常(?:不过)?了"), "不丢人": re.compile(r"不丢人")}
 
 
 def used_endings(hist):
@@ -522,27 +582,59 @@ def birth_chart(birth):
 
 ASTRO_NOTE = ("他在聊星座、血型、紫微、八字、占星这一类：专心陪他聊这个，照【他想聊星座、八字这些】来，"
               "不猜他为什么问，不把话拉回他的心事，也不扯这次前面聊过的别的事、以前说过的事（他自己连上的除外）。"
-              "他让你剖析、讲讲，就说透，三四段；随口一问，几句就行。")
+              "他让你剖析、讲讲，就说透，三四段；随口一问，几句就行。"
+              "不预言：不说哪一年会发生什么、会不会转运，不说他或家人的健康、病情、灾祸、寿命、婚姻、官司会怎样；"
+              "他追着要“确切一点”“别含糊”，也不给，直说这些说法讲的是性情和倾向，讲不了哪年发生什么，再接着聊他关心的那件事本身。"
+              "他问某一年（本命年、太岁、流年）：讲老讲究里对这一年的说法，句句落在“说法是”“老讲究里讲”上，"
+              "不说“会发生”“真的会动”“会转运”这种断定，也不把说法套到他的钱、工作、家人身上去断事。"
+              "他在聊天里说的出生时间、出生地，以【他的盘】为准；【他的盘】里没有的，不自己推算、不编干支和星位。")
 
 
-ASTRO_MORE = re.compile(r"呢|吗|继续|还有|然后|再说|多说|展开|细说|具体|准|像|哈")
+ASTRO_MORE = re.compile(r"呢|吗|继续|还有|然后|再说|多说|展开|细说|具体|确切|含糊|详细|准|像|哈|怎样|怎么样")
 
 
 def astro_turn(users):
-    """He is on astrology and the like: his last line says so, or it is a short follow-up ("那双鱼呢", "准吗") to one
-    that did ("我妈住院了" after one is not)."""
-    return bool(users) and (bool(ASTRO.search(users[-1])) or (len(users) > 1 and len(users[-1]) <= 12 and
+    """He is on astrology and the like: his last line says so, or it is a short follow-up ("那双鱼呢", "准吗", "能说的确切
+    一些吗？别那么含糊") to one that did ("我妈住院了" after one is not)."""
+    return bool(users) and (bool(ASTRO.search(users[-1])) or (len(users) > 1 and len(users[-1]) <= 20 and
                                                              bool(ASTRO_MORE.search(users[-1]) and ASTRO.search(users[-2]))))
+
+
+# Forecasts about health and fate that the astrology talk must never give (2026-11-24 a tester, pressed for "确切一些", was
+# told when a family member's illness would ease). The prompt says so; this drops any such sentence that still slips through.
+PREDICT = re.compile(r"(?:病|病情|身体|健康|住院|手术|寿命|灾|血光|车祸|官司|破财|离婚)[^。！？\n]{0,24}"
+                     r"(?:好转|缓和|稳下来|好起来|加重|恶化|出事|应验|躲不过|化解|有救|没救)")
+
+# "出生早上7点45分", "我是晚上8点生的", "7:45出生": a birth time he says in chat counts when the profile has none.
+BIRTH_TIME = re.compile(r"(?:出生|生的|生于|生辰|出生时间)[^\d\n]{0,8}?(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|夜里)?\s*(\d{1,2})\s*"
+                        r"(?:[:：]\s*(\d{2})|[点时]\s*(?:(\d{1,2})\s*分?|(半))?)"
+                        r"|(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|夜里)?\s*(\d{1,2})\s*(?:[:：]\s*(\d{2})|[点时]\s*(?:(\d{1,2})\s*分?|(半))?)\s*(?:出生|生的)")
+
+
+def said_birth_time(users):
+    """The latest birth time he stated in these lines, as 'HH:MM', or ''."""
+    for line in reversed(users):
+        m = BIRTH_TIME.search(line or "")
+        if not m:
+            continue
+        g = m.groups()
+        part, h, mm, mi, half = g[0:5] if g[1] else g[5:10]
+        h, mi = int(h), int(mm or mi or 0) if not half else 30
+        if part in ("下午", "傍晚", "晚上") and h < 12 or part == "夜里" and 6 <= h < 12:
+            h += 12
+        if 0 <= h < 24 and 0 <= mi < 60:
+            return "%02d:%02d" % (h, mi)
+    return ""
 
 
 def astro_run(hist):
     """The tail of the history that is about star signs and the like (short lines such as "准吗" "嗯" go with it). Even
     told not to, the selves read whatever he said just before into his chart ("回到家喂完猫……这就是月亮双鱼")."""
-    start = len(hist)
-    for i in range(len(hist) - 1, -1, -1):
+    start = last = max((i for i, h in enumerate(hist) if h.get("role") == "user"), default=len(hist))
+    for i in range(last, -1, -1):  # his last line always stays (a follow-up astro_turn accepted may not match below)
         said = str(hist[i].get("content") or "")
         if hist[i].get("role") == "user":
-            if not (ASTRO.search(said) or len(said) <= 12):
+            if i < last and not (ASTRO.search(said) or len(said) <= 12 or len(said) <= 20 and ASTRO_MORE.search(said)):
                 break
             start = i
     return hist[start:]
@@ -561,6 +653,40 @@ def pick_views(pid, users, ask):
     except LLMError:
         return []
     return [i for i in dict.fromkeys(re.findall(r"t\d{2}", text or "")) if i in lib][:2]
+
+
+# 路子 (user 2026-11-24: "导师有套路没问题，但是套路不能单一……至少5种套路，每次回复根据具体情况选择一种"): 导师 used to walk
+# one fixed path in every long reply (安慰 → 一般会说…可… → 重新定义 → 放回生活 → 断言). personas/<pid>/路子.json lists
+# several whole routes; a short model call picks the one that fits what he just said, avoiding the last two used.
+@functools.lru_cache(maxsize=4)
+def moves(pid):
+    try:
+        with open(os.path.join(PERSONA_DIR, pid, "路子.json"), encoding="utf-8") as f:
+            return {m["id"]: m for m in json.load(f)}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+MOVE_PROMPT = ("你在帮一个聊天人格挑这一条回复的路子。下面是几种路子和各自适合的情况：\n%s\n\n"
+               "读他最近说的话（最后一句最要紧）和这个人格上一条说了什么，挑最合适的一种。%s只输出编号，比如 m3。")
+
+
+def pick_move(pid, users, last_ai, avoid, ask):
+    """One route id for this reply, or None (no routes for this persona, a one-word line, astrology, a failed call)."""
+    lib = moves(pid)
+    if not lib or not users or len(users[-1].strip()) < 2 or astro_turn(users):
+        return None
+    menu = "\n".join("%s %s：%s" % (i, m["name"], m["when"]) for i, m in lib.items())
+    skip = "这个人格最近两条用过 %s，这次换一种。" % "、".join(avoid) if avoid else ""
+    if len(last_ai) >= 150 and "m8" in lib and "m8" not in avoid:  # a full route again on every follow-up read as a template
+        skip += "它上一条已经说了一大段：他这句要是没讲出新的一层（新的事、新的人、新的担心），就选 m8。"
+    said = "\n".join("他：" + u for u in users[-3:]) + ("\n这个人格上一条：" + clip(last_ai, 300) if last_ai else "")
+    try:
+        text = ask([{"role": "system", "content": MOVE_PROMPT % (menu, skip)}, {"role": "user", "content": said}])
+    except LLMError:
+        text = ""
+    ids = [i for i in re.findall(r"m\d+", text or "") if i in lib and i not in avoid]
+    return ids[0] if ids else random.choice([i for i in lib if i not in avoid] or list(lib))
 
 
 def views_block(pid, ids):
@@ -600,7 +726,7 @@ def user_block(req):
     return "【这位用户】\n称呼：%s" % (clip(req.get("nick"), 12) or "朋友")
 
 
-def build_messages(pid, req, know=None, views=""):
+def build_messages(pid, req, know=None, views="", move=None):
     """Chat: persona + who the user is (+ what the selves know) (+ view cards for what he is talking about) + the last
     16 turns."""
     ctx = [user_block(req)]
@@ -621,19 +747,37 @@ def build_messages(pid, req, know=None, views=""):
         hist = astro_run(hist)
     chart = birth_chart(req.get("birth")) if astro else None
     if chart:  # only while he is on it (otherwise it creeps into everything), and only the systems he is asking about
-        said = " ".join(str(h.get("content") or "") for h in hist if h.get("role") == "user")
-        ctx.append(paipan.chart_text(chart, chart_parts(said)))
+        ctx.append(paipan.chart_text(chart, chart_parts(str(hist[-1].get("content") or ""))))
     if views:
         ctx.append(views)
     # The selves don't know about each other (user 2026-11-23): no name of, or referral to, the other one.
     now = "【此刻】日期 %s（你心里有数就行，回复里不说今天、今晚这类时间词）。" % datetime.date.today().isoformat()
     if astro:
         now += ASTRO_NOTE
-    tics = used_endings(hist)
+    full = req.get("history") or []
+    if full and any(same_line(full[-1].get("content"), h.get("content")) for h in full[:-1] if h.get("role") == "user"):
+        now += REPEAT_NOTE
+    tics, said = used_endings(hist), [k for k, rx in TICS.items() if rx.search(last_ai)]
     if tics:
         now += "你前面已经拿“%s”收过尾了，这条别再这么收，也别换个说法说同一个意思。" % "”“".join(tics)
+    if said:
+        now += "你上一条用过“%s”，这一条别再用这些说法。" % "”“".join(said)
+    # 接着聊 (user 2026-11-24 "回答还是比较公式化"): after a long reply, the next one used to start the whole arc again
+    # (陪 → 列他那几件事 → 不是……是…… → 许可) and list his troubles a second time.
+    follow = len(last_ai) >= 150 and not astro
+    route = moves(pid).get(move) if move else None
+    if follow:
+        now += ("这是接着聊：你上一条已经说了一大段，这一条接着他刚说的这一句往下走，上一条说过的（他的处境、那几件事、"
+                "你的安慰、看法和给过的建议）不再说一遍，也不再从头陪一遍、理一遍。" + ("" if route else random.choice(FOLLOW_SHAPES[pid]) + "。"))
+    if route and follow and move != "m8":
+        now += ("这一条从【%s】的角度接着说，一两段就够，不用把这条路子的每一步都走到，也不用收在一句金句上。" % route["name"])
+    elif route:
+        now += ("这一条走【%s】这条路子：%s只走这一条，别把别的路子串进来，也不用每条都收在一句金句上。"
+                % (route["name"], route["how"]))
+    if not astro and len(str(hist[-1].get("content") or "")) >= 6:  # the most worn device; the style rule alone didn't hold
+        now += "这一条里“不是……是……”这种先否定再翻过来的句子最多一处，其余的直接说是什么。"
     if pid == "pingzuo":  # 客户：“说长一点，帮我分析化解情绪”；伙伴的档案处处说慢、说短，这里再把长度提一次
-        now += "这一条不提问，不用问号。" + ("" if astro else
+        now += "这一条不提问，不用问号。" + ("" if astro or follow else
                "他要是带着情绪、讲了一件压着他的事，就说长一点，说够四五段、每段三四句："
                "先陪着，再把他这股情绪理一理，再帮他化开一点；他只是随口一句，就短短地回。")
     elif "？" in last_ai or "?" in last_ai:  # users: "我说一句问我一句，更累了"
@@ -803,6 +947,7 @@ class App:
         self.mem = Memory(os.path.join(DATA_DIR, "users"),
                           lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0])
         self.lock = threading.Lock()       # rate limits
+        self.recent_moves = {}             # (uid, pid) -> the last two 路子 used, so the next reply takes another
         self.disk_lock = threading.Lock()  # usage.json and the jsonl logs
         self.hits = {k: defaultdict(deque) for k in ("tts", "chat", "asr", "fb")}
         for d in (CACHE_DIR, LOG_DIR):
@@ -851,16 +996,42 @@ class App:
     def chat(self, pid, req, who):
         uid = req.get("u") if valid_uid(req.get("u")) else None
         users = [clip(h.get("content"), 300) for h in (req.get("history") or [])[-6:] if h.get("role") == "user"]
+        birth = req.get("birth") if isinstance(req.get("birth"), dict) else None
+        said_time = said_birth_time([str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") == "user"])
+        if birth and birth.get("date") and not birth.get("time") and said_time:  # "出生早上7点45分" said in chat
+            req = dict(req, birth=dict(birth, time=said_time, slot=""))
         know = self.mem.context(uid, " ".join(users[-3:]), pid, brief=astro_turn(users)) if uid else None
-        vids = pick_views(pid, users, lambda m: self.llm(m, max_tokens=20, temperature=0, timeout=8)[0])
-        msgs = build_messages(pid, req, know, views_block(pid, vids))
+        ask = lambda m: self.llm(m, max_tokens=20, temperature=0, timeout=8)[0]
+        vids = pick_views(pid, users, ask)
+        last_ai = next((str(h.get("content") or "") for h in reversed(req.get("history") or []) if h.get("role") != "user"), "")
+        key = (uid or who.get("ip"), pid)
+        move = pick_move(pid, users, last_ai, self.recent_moves.get(key, []), ask)
+        if move:
+            with self.lock:
+                self.recent_moves[key] = [move] + self.recent_moves.get(key, [])[:1]
+                if len(self.recent_moves) > 5000:  # in-process only; a restart just forgets which routes were used
+                    self.recent_moves.clear()
+        msgs = build_messages(pid, req, know, views_block(pid, vids), move)
         raw, model, ms = self.llm(msgs, max_tokens=CHAT_MAX_TOKENS, timeout=40)
+        # A tester sent the same long message twice in one visit and got the same 587 字 back: with its own answer to that very
+        # message right above, the model copied it. A reply that mostly repeats an earlier one is written once more.
+        earlier = [str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") != "user"]
+        if earlier and max(overlap(raw, e) for e in earlier) > COPY_LIMIT:
+            retry = [dict(msgs[0], content=msgs[0]["content"] + "\n\n" + REWRITE_NOTE)] + msgs[1:]
+            try:
+                raw2, model, ms2 = self.llm(retry, max_tokens=CHAT_MAX_TOKENS, temperature=1.0, timeout=40)
+                if max(overlap(raw2, e) for e in earlier) < max(overlap(raw, e) for e in earlier):
+                    raw, ms = raw2, ms + ms2
+            except LLMError:
+                pass  # the first reply still stands
         cap = self.mem.reply_cap(uid, pid) if uid else REPLY_MAX
         fitted = fit(raw, cap)
         told = any("12356" in str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") != "user")
         reply = postprocess(msgs[-1]["content"], fitted, " ".join(users), told, pid)
+        if astro_turn(users) and PREDICT.search(reply):
+            reply = drop_sentences(reply, PREDICT.pattern)
         tid = self.log("chat", who, pid, req, user=msgs[-1]["content"], reply=reply, raw=raw if fitted != raw else None,
-                       cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, views=vids or None,
+                       cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, views=vids or None, move=move,
                        hist=req.get("history"), profile=clip(req.get("profile"), 800) or None,
                        birth=req.get("birth") if isinstance(req.get("birth"), dict) else None)
         if uid and self.mem.append(uid, pid, [("user", clip(msgs[-1]["content"], 1000)), ("ai", reply)]) >= 8:

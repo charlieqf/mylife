@@ -47,8 +47,11 @@ def main():
     def run(c):
         req = {"nick": args.nick, "profile": args.profile, "history": c["turns"]}
         users = [t["content"] for t in c["turns"][-6:] if t["role"] == "user"]
-        vids = srv.pick_views(args.persona, users, lambda m: srv.complete(m, 20, 0, 8)[0])
-        msgs = srv.build_messages(args.persona, req, new_user_know(args.persona), srv.views_block(args.persona, vids))  # as /api/chat
+        ask = lambda m: srv.complete(m, 20, 0, 8)[0]
+        vids = srv.pick_views(args.persona, users, ask)
+        last_ai = next((t["content"] for t in reversed(c["turns"]) if t["role"] != "user"), "")
+        move = srv.pick_move(args.persona, users, last_ai, [], ask)  # as /api/chat (no earlier routes in a one-off case)
+        msgs = srv.build_messages(args.persona, req, new_user_know(args.persona), srv.views_block(args.persona, vids), move)
         t0 = datetime.datetime.now()
         try:
             said = " ".join(t["content"] for t in c["turns"][-6:] if t["role"] == "user")  # same as /api/chat
