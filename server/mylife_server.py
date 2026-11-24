@@ -55,7 +55,7 @@ BIND = os.environ.get("MYLIFE_BIND", "127.0.0.1")
 PORT = int(os.environ.get("MYLIFE_PORT", "18960"))
 DAILY_CHAR_CAP = int(os.environ.get("MYLIFE_TTS_DAILY_CHARS", "100000"))
 PER_IP_PER_MIN = int(os.environ.get("MYLIFE_TTS_PER_MIN", "40"))
-MAX_TEXT = 1000  # the longest chat reply (memory.DEPTH tops out at 900 字) must still be readable aloud
+MAX_TEXT = 1800  # the longest chat reply (an answer to a practical question, PRACTICAL_CAP) must still be readable aloud
 CHUNK = 140  # Tencent TextToVoice accepts <= 150 Chinese characters per call
 
 # Same definition as countChars() in the page: what counts as a spoken character.
@@ -268,6 +268,18 @@ CLOSING_PATH = os.environ.get("MYLIFE_CLOSING_STYLE", os.path.join(PROMPT_DIR, "
 CARDS_PATH = os.environ.get("MYLIFE_CARDS", os.path.join(PROMPT_DIR, "rainbow-cards.json"))
 PORTRAIT_PATH = os.environ.get("MYLIFE_PORTRAIT", os.path.join(PROMPT_DIR, "portrait.txt"))
 PORTRAIT_HEARD_PATH = os.path.join(os.path.dirname(PORTRAIT_PATH), "portrait-heard.txt")
+# Pictures he sends (client 2026-11-24: "支持上传图片，这样可以上传系统排盘截图或者其他图片"). A model first writes down
+# what is in the picture (a 排盘 screenshot copied out palace by palace) and the page sends that text as his message, so
+# the history, the memory and the logs stay text. On a test 紫微 screenshot deepseek-v4.1-flash copied all twelve palaces
+# right three times out of three in ~4 s; qwen3.7-plus took 17-26 s and misread a star now and then, so it is the fallback.
+SEE_PATH = os.path.join(os.path.dirname(PORTRAIT_PATH), "see-image.txt")
+SEE_MODELS = ((os.environ.get("MYLIFE_SEE_ENDPOINT", "tokenhub"), os.environ.get("MYLIFE_SEE_MODEL", "deepseek-v4.1-flash")),
+              ("dashscope", "qwen3.7-plus"))
+IMAGE_MAX_BYTES = 3_000_000  # the page sends a JPEG of at most 2400 px a side, usually 300-800 KB
+IMAGE_DAILY = int(os.environ.get("MYLIFE_IMAGE_DAILY", "500"))
+IMAGE_PER_MIN = 10
+IMAGE_DIR = os.path.join(DATA_DIR, "images")  # kept with the logs while testing, to check a misread chart
+IMAGE_URL = re.compile(r"data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/=\s]+)")
 SIGNS = {"白羊": "火", "狮子": "火", "射手": "火", "金牛": "土", "处女": "土", "摩羯": "土",
          "双子": "风", "天秤": "风", "水瓶": "风", "巨蟹": "水", "天蝎": "水", "双鱼": "水"}
 MBTI_TYPES = {a + b + c + d for a in "EI" for b in "SN" for c in "TF" for d in "JP"}
@@ -354,13 +366,18 @@ def same_line(a, b):
 HARD_END = re.compile(r"我(?:就|一直)?在(?:这儿|这里|呢)|我在[。！]|我陪(?:着)?你|陪你(?:待|坐)|想哭就哭|喝[口点杯]?热|早点睡|洗把脸")
 
 
-def drop_stock_end(reply):
+# An answer to a practical question that ends by handing the choice back ("这个客户值不值得……你比我清楚", "怎么定是你的").
+HANDBACK = re.compile(r"你比我清楚|只有你(?:自己)?(?:最)?(?:清楚|知道|能定)|怎么定[^。！？\n]{0,6}(?:是你的|你说了算)|轮不到我"
+                      r"|你(?:自己)?心里(?:其实)?(?:早就|已经)?有(?:答案|数|杆秤)|那杆秤|你(?:心里)?其实已经知道")
+
+
+def drop_stock_end(reply, rx=HARD_END):
     """A long chat reply doesn't end on a stock line (我陪你, 想哭就哭, 喝口热的): told not to in the prompt, the selves
     still did (real user 2026-11-24: "回答还是比较公式化"). Short replies ("嗯，我在。") keep theirs."""
     paras = [p.strip() for p in reply.split("\n") if p.strip()]
     if len(paras) < 2:
         return reply
-    keep = "".join(x for x in re.findall(r"[^。！？]+[。！？]?", paras[-1]) if not HARD_END.search(x)).strip()
+    keep = "".join(x for x in re.findall(r"[^。！？]+[。！？]?", paras[-1]) if not rx.search(x)).strip()
     if len(keep) == len(paras[-1]):
         return reply
     return "\n\n".join(paras[:-1] + ([keep] if keep else []))
@@ -374,7 +391,7 @@ def postprocess(user_text, reply, recent=None, told=False, pid=None):
         reply = untime(reply, recent)
     if pid:
         reply = drop_other_self(pid, reply, (user_text or "") + (recent or ""))
-    reply = drop_asides(reply.strip())
+    reply = drop_asides(strip_md(reply))
     if len(reply) > 1 and reply[0] in "“\"" and reply[-1] in "”\"" and not re.search("[“”\"]", reply[1:-1]):
         reply = reply[1:-1].strip()  # the model wrapped the whole reply in quotes; a quote that opens a sentence stays
     reply = re.sub(r'"([^"\n]{1,60})"', r"“\1”", reply)  # 中文里的成对半角引号换成全角
@@ -386,6 +403,12 @@ def postprocess(user_text, reply, recent=None, told=False, pid=None):
     elif recent is not None and not CRISIS.search(recent) and AT_RISK.search(reply):
         reply = drop_sentences(reply, AT_RISK.pattern)
     return reply
+
+
+def strip_md(text):
+    """The page shows plain text: long chart reads came back with **星盘** headings and "- " bullets shown as is."""
+    text = re.sub(r"\*\*|__|^#{1,6}[ \t]*", "", text, flags=re.M)
+    return re.sub(r"^[ \t]*[-*•][ \t]+", "", text, flags=re.M).strip()
 
 
 ASIDE = re.compile(r"[（(][^（）()\n]*[）)]")
@@ -411,7 +434,7 @@ class DailyCap(LLMError):
         super().__init__("DailyCap")
 
 
-def llm_call(endpoint, model, messages, max_tokens=300, temperature=0.8, timeout=25):
+def llm_call(endpoint, model, messages, max_tokens=300, temperature=0.8, timeout=25, think=None):
     base, keyvar = LLM_BASES[endpoint]
     key = os.environ.get(keyvar, "")
     if not key:
@@ -420,6 +443,8 @@ def llm_call(endpoint, model, messages, max_tokens=300, temperature=0.8, timeout
             "max_tokens": max_tokens, "stream": False}
     if endpoint == "tokenhub" and model.startswith("deepseek"):
         body["thinking"] = {"type": "disabled"}  # thinking adds ~1s and is not needed for chat
+    if endpoint == "dashscope" and think is not None:
+        body["enable_thinking"] = think  # qwen3.6+ think by default: 20-60 s to read a screenshot instead of a few
     req = urllib.request.Request(base + "/chat/completions", method="POST",
                                  data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                                  headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
@@ -518,7 +543,12 @@ ASTRO = re.compile(r"星座|星盘|水逆|合盘|占星|宫位|十二宫|血型|
                    # follow-ups a tester sent mid-chart (2026-11-24) that went undetected, so the chart and the no-prediction
                    # rule were missing and the self made up pillars and a health forecast
                    r"|转运|走运|运气|本命年|出生时间|生辰|几点(?:出)?生|出生(?:在|于|是)?(?:凌晨|早上|上午|中午|下午|傍晚|晚上|夜里)?\d"
-                   r"|(?:19|20)?\d{2}年(?:会|能|怎|运|好不好|顺)")
+                   r"|(?:19|20)?\d{2}年(?:会|能|怎|运|好不好|顺)"
+                   # "按我的盘分析一下未来两年的感情" (2026-11-24 test) went undetected, so 导师 had no chart and asked for the city
+                   # not stock talk: "看盘到半夜", "大盘上涨", "这个盘口"
+                   r"|(?:我的|我这个?|这个?|按|照|排|看(?:看|一下))盘(?![子点口中整])|(?:命|星|我的|你的|这张)盘(?:上|面)"
+                   r"|时间节点|重要的?时间点"
+                   r"|(?:未来|接下来|今后|往后)(?:一|两|三|几|五)?年的?(?:感情|姻缘|桃花|事业|财运|运势|运气|走势|走向)")
 
 
 CHART_PARTS = {
@@ -529,16 +559,21 @@ CHART_PARTS = {
                        r"|" + _SIGN)}
 
 
-def chart_parts(last):
+def chart_parts(lines):
     """Which of his charts his last line asks about; all three when it names none (运势, 转运, a birth time, 27年会怎样):
-    given only the planets, the self worked out the 八字 itself and got the pillars wrong."""
-    return [k for k, p in CHART_PARTS.items() if p.search(last)] or list(CHART_PARTS)
+    given only the planets, the self worked out the 八字 itself and got the pillars wrong. A bare follow-up ("准吗",
+    "还有呢") stays on the chart the line before it named. lines = his lines in this astrology run, oldest first."""
+    for i, line in enumerate(reversed(lines)):
+        got = [k for k, p in CHART_PARTS.items() if p.search(line)]
+        if got or i == 0 and is_astro(line):
+            return got or list(CHART_PARTS)
+    return list(CHART_PARTS)
 
 
 # Stock endings (user 2026-11-24 "结尾的固定套路要优化一下": 伙伴 ended 54% of replies with 我在这儿 / 想哭就哭 /
 # 喝口热的, 导师 kept coming back to 先别急着…… / 怎么定，是你的; after one such ending the next reply usually repeated it).
 END_TICS = re.compile(r"我(?:就|一直)?在(?:这儿|这里|呢)|我在。|我陪(?:着)?你|陪你(?:待|坐)|想哭就哭|喝[口点杯]?热|热水|热乎|洗把脸"
-                      r"|睡一觉|早点睡|缓一缓|歇会儿|别(?:跟|和)自己较劲|先别(?:急着|逼自己)|怎么定，?是你的|一件小事|眼下(?:能做|先|就)"
+                      r"|睡一觉|早点睡|缓一缓|歇会儿|别(?:跟|和)自己较劲|先别(?:急着|逼自己)|怎么定[^。！？\n]{0,6}(?:是你的|说了算)|一件小事|眼下(?:能做|先|就)"
                       r"|只有一件|不用(?:马上)?逼自己|难受就难受")
 
 
@@ -570,61 +605,298 @@ def used_endings(hist):
 
 
 def birth_chart(birth):
-    """The page's birth fields {date, time, slot, city} -> paipan.chart (cached), or None when there is no usable date."""
+    """The page's birth fields {date, time, slot, city, geo?} -> paipan.chart (cached), or None when there is no usable
+    date. geo = [name, lat, lon, tz] for a city the table doesn't have (see Geo)."""
     if not isinstance(birth, dict) or not birth.get("date"):
         return None
+    geo = birth.get("geo")
+    geo = tuple(geo) if isinstance(geo, (list, tuple)) and len(geo) == 4 else None
     try:
         return paipan.chart(str(birth["date"])[:10], clip(birth.get("time"), 5), clip(birth.get("slot"), 4),
-                            clip(birth.get("city"), 40))
-    except ValueError:
+                            clip(birth.get("city"), 40), geo)
+    except (ValueError, TypeError):
         return None
 
 
-ASTRO_NOTE = ("他在聊星座、血型、紫微、八字、占星这一类：专心陪他聊这个，照【他想聊星座、八字这些】来，"
+GEO_PROMPT = ("下面是一个人填的出生地：“%s”。给出这个地方（城市、县或区）的大致经纬度和时区。"
+              "只输出一个 JSON：{\"name\": \"规范的地名\", \"country\": \"所在国家或地区\", \"lat\": 纬度, "
+              "\"lon\": 经度（东经为正）, \"tz\": \"IANA 时区名\"}。认不出来、或者不是一个地名，就只输出 {}。")
+# Mainland births are recorded in Beijing time, Xinjiang's too. A lat/lon box used to decide that and also caught Korea,
+# Kyushu, northern Vietnam, Nepal, northern India and the Russian Far East.
+CHINA_TZ = {"Asia/Shanghai", "Asia/Urumqi", "Asia/Chongqing", "Asia/Chungking", "Asia/Harbin", "Asia/Kashgar", "PRC"}
+
+
+class Geo:
+    """Birth places the city table doesn't have (县级市、县、海外小城): one short model call each, kept in
+    $MYLIFE_DATA/geo.json so a place is looked up once. Mainland China always gets Beijing time."""
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.known = json.load(f)
+        except (OSError, ValueError):
+            self.known = {}
+
+    def find(self, city, ask):
+        city = clip(city, 40)
+        known = paipan.place(city) if city else None
+        if not city or known and not known["approx"]:  # "浙江苍南" only matched its province: look the county up
+            return None
+        with self.lock:
+            if city in self.known:
+                return self.known[city] or None
+        try:
+            got = parse_json(ask([{"role": "user", "content": GEO_PROMPT % city}])) or {}
+        except LLMError:
+            return None  # a failed call is not remembered: try again next time
+        try:
+            lat, lon, tz = float(got["lat"]), float(got["lon"]), str(got.get("tz") or "")
+            where = city + str(got.get("name") or "") + str(got.get("country") or "")
+            if (tz in CHINA_TZ or str(got.get("country") or "") in ("中国", "中国大陆")) \
+                    and not re.search(r"香港|澳门|台湾|台北|高雄|台中", where):
+                tz = "Asia/Shanghai"
+            paipan.ZoneInfo(tz)
+            found = [clip(got.get("name"), 20) or city, round(lat, 2), round(lon, 2), tz] if -90 < lat < 90 and -180 < lon <= 180 else []
+        except (KeyError, TypeError, ValueError):  # not a place (or not one the model knows): remember that too
+            found = []
+        with self.lock:
+            self.known[city] = found
+            write_json_atomic(self.path, self.known)
+        return found or None
+
+
+ASTRO_NOTE = ("他在聊星座、血型、紫微、八字、占星、MBTI、性格分析这一类：专心陪他聊这个，照【他想聊星座、八字这些】来，"
               "不猜他为什么问，不把话拉回他的心事，也不扯这次前面聊过的别的事、以前说过的事（他自己连上的除外）。"
-              "他让你剖析、讲讲，就说透，三四段；随口一问，几句就行。"
-              "不预言：不说哪一年会发生什么、会不会转运，不说他或家人的健康、病情、灾祸、寿命、婚姻、官司会怎样；"
-              "他追着要“确切一点”“别含糊”，也不给，直说这些说法讲的是性情和倾向，讲不了哪年发生什么，再接着聊他关心的那件事本身。"
-              "他问某一年（本命年、太岁、流年）：讲老讲究里对这一年的说法，句句落在“说法是”“老讲究里讲”上，"
-              "不说“会发生”“真的会动”“会转运”这种断定，也不把说法套到他的钱、工作、家人身上去断事。"
-              "他在聊天里说的出生时间、出生地，以【他的盘】为准；【他的盘】里没有的，不自己推算、不编干支和星位。")
+              "他让你分析、剖析，就照【深入分析】说透；随口一问，几句就行。"
+              "他在聊天里说的出生时间、出生地，以【他的盘】为准；【他的盘】里没有的，不自己推算、不编干支和星位。"
+              "缺出生时间排不了的（紫微、时柱、上升和宫位），就请他在这里直接说几点几分出生，说了程序就排上，不用他去改资料，"
+              "也不用他去别的工具、App 排（这里自己能排）；他手上有别处排好的盘，可以发截图来。"
+              "八字看感情、排大运要分男女：他没说过自己是男是女，就别自己定（不说“男命”“女命”），用得着就问一句。")
+# 以后会怎样 (client 2026-11-24): 导师 reads the chart objectively and gives 时间节点 from 【流年和行运】; 伙伴 stays as it was,
+# talking about temperament and tendencies, never which year brings what. Health, disaster, lifespan and lawsuits stay out
+# for both (a tester's family illness, see PREDICT).
+FUTURE_NOTE = {
+    "bange": ("看盘你是客观分析：不安慰、不铺垫、不讲道理，排出来什么说什么。先摆盘面，再一条条下判断，每条说清是盘上哪一处看出来的；"
+              "几样说的一致还是打架，直说。说到以后，照【流年和行运】给时间节点：哪一年、哪几个月，盘上哪方面有动静"
+              "（感情、事业学业、钱、搬动出行、人际），通常会以什么样子出现，该留意什么；他问以后几年，表里的每一年都讲到，"
+              "每年至少一个节点，木星土星那几段能到月份的给到月份；他要具体到哪年哪月，就照表给，不含糊。"
+              "说成盘上的说法（“按流年……”“木星走到……这段”），讲到倾向和时机为止，不打包票说一定发生；【流年和行运】里没有的年份和事不编。"
+              "健康、病灾、寿命、官司、家人安危不断（疾厄宫、化忌、煞星照性情和做事讲，不往身体和病上说，也不用声明你不说）：他问，就说盘上讲的是性情和时机，断不了这些。"
+              "长的分析可以分几块说（比如盘面、性格、感情、事业、时间节点），每块开头一行短标题，不加符号。"
+              "他问以后的时候，整条回复在一千四百字以内：盘面压到两三句，篇幅留给每一年的节点，宁可每年说短一点，也别讲不到后面的年份。"),
+    "pingzuo": ("不预言：不说哪一年会发生什么、会不会转运，不说他或家人的健康、病情、灾祸、寿命、婚姻、官司会怎样；"
+                "他追着要“确切一点”“别含糊”，也不给，直说这些说法讲的是性情和倾向，讲不了哪年发生什么，再接着聊他关心的那件事本身。"
+                "他问某一年（本命年、太岁、流年）：讲老讲究里对这一年的说法，句句落在“说法是”“老讲究里讲”上，"
+                "不说“会发生”“真的会动”“会转运”这种断定，也不把说法套到他的钱、工作、家人身上去断事。")}
+
+SAVED_NOTE = ("他刚在聊天里说了%s：程序已经按这个排进【他的盘】，也替他存进了资料。直接照【他的盘】说，"
+              "不用让他再改资料、再发一次；你前面自己推的时辰、时柱、命宫跟盘上不一样的，就直说前面说得不对，以盘为准。")
+BIRTH_FIELD = {"date": "出生日期 ", "time": "出生时间 ", "city": "出生地 "}
+# What the self said before the chart had his birth time (a tester, 2026-11-24): with "紫微排不了" and "时柱乙酉" in its own
+# earlier replies, 导师 repeated both after the time was in, although 【他的盘】 had the 紫微 palaces and 时柱甲申; told in
+# 【此刻】 that those were wrong, it still went with its history and once made up a 命宫. So those sentences are also taken
+# out of its earlier replies before they go to the model.
+STALE_ZIWEI = r"紫[微薇][^。！？\n]{0,24}(?:排不了|排不出|没法排|排不全|不能排)|十四主星|另一套算法|排盘的?工具"
+PILLAR_SAID = r"时柱(?:是|就是|为|排出来是)?([甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥])"
+MING_SAID = r"(?<!流年)命宫(?:在|落在|是)([子丑寅卯辰巳午未申酉戌亥])"
+
+
+def stale_claims(chart, hist):
+    """-> (a line for 【此刻】, hist with the self's out-of-date chart claims taken out)."""
+    said = "\n".join(str(h.get("content") or "") for h in hist if h.get("role") != "user")
+    out, drop = [], []
+    if chart.get("ziwei"):
+        if re.search(STALE_ZIWEI, said):
+            out.append("你前面说过紫微排不了：那时还没有他的出生时间，现在【他的盘】里有紫微了，照着说，先直说一句现在排上了")
+            drop.append(STALE_ZIWEI)
+        wrong = {m for m in re.findall(MING_SAID, said) if m != chart["ziwei"]["palaces"][0]["branch"]}
+        if wrong:
+            drop.append(r"(?<!流年)命宫(?:在|落在|是)[%s]" % "".join(wrong))
+    hour = chart["bazi"]["pillars"][3] if len(chart["bazi"]["pillars"]) == 4 else ""
+    wrong = sorted({m for m in re.findall(PILLAR_SAID, said) if m != hour})
+    if hour and wrong:
+        out.append("你前面说时柱是%s，【他的盘】上是%s：照盘说，提一句前面说的不对（多半是按钟表时间算的）" % ("、".join(wrong), hour))
+        drop.append(r"时柱(?:是|就是|为|排出来是)?(?:%s)" % "|".join(wrong))
+    if drop:
+        hist = [h if h.get("role") == "user" else dict(h, content=drop_sentences(str(h.get("content") or ""), "|".join(drop)))
+                for h in hist]
+    return ("；".join(out) + "。" if out else ""), hist
+
+
+IMAGE_MARK = "【图片】"  # the page's message for a picture: the mark, what the vision model saw, then his words if any
+IMAGE_NOTE = ("他发来一张图片：“【图片】”后面是看图写下的内容（他发的是图，不是这段字：就当你自己看到了这张图，"
+              "不说“你发的文字”“描述里”“截图上写着”；字后面另起一行的，才是他打的字）。照着图聊他想聊的。"
+              "图上是别处排的盘：就照图上的盘说；和【他的盘】有出入的地方（时辰、命宫、上升这些），点一句多半是出生时间或者算法"
+              "（钟表时间还是真太阳时）不同，不争谁对。")
 
 
 ASTRO_MORE = re.compile(r"呢|吗|继续|还有|然后|再说|多说|展开|细说|具体|确切|含糊|详细|准|像|哈|怎样|怎么样")
 
 
+# 性格分析和 MBTI (user 2026-11-24: "对星座和mbti的分析停留在浅尝辄止……给了生日没法自动排盘，只能主动给它具体类别再分析"):
+# "分析一下我的性格" never reached the chart, so he had to spell out 太阳狮子、月亮双鱼、上升摩羯 himself.
+MBTI_TYPE = re.compile(r"(?<![A-Za-z])([EIei][NSns][TFtf][JPjp])(?![A-Za-z])")
+ANALYZE = re.compile(r"(?:分析|剖析|解读|解析|说说|讲讲|看看|聊聊)(?:一下)?(?:我的?|我这个人的?)?(?:性格|特质|个性|人格|为人)"
+                     # asked of the self, not said in despair ("我真不知道我是个什么样的人了，好累")
+                     r"|(?:性格|特质|个性)(?:分析|特点|是什么|怎么样|如何)"
+                     r"|(?:分析|剖析|解读|看看|说说|讲讲|猜猜|你觉得|你看)(?:一下)?我是(?:个|一个)?(?:什么样|怎样|啥样)的人")
+TYPING = re.compile(ANALYZE.pattern + r"|(?i:mbti)|16\s*型(?:人格)?|(?<![A-Za-z])[iIeE]人|" + MBTI_TYPE.pattern)
+DEEP = re.compile(ANALYZE.pattern + r"|分析|剖析|解读|解析|详细|深入|全面|细说|展开说|深一点|具体讲|说透|多讲讲")
+
+
+def is_astro(text):
+    return bool(ASTRO.search(text) or TYPING.search(text))
+
+
 def astro_turn(users):
-    """He is on astrology and the like: his last line says so, or it is a short follow-up ("那双鱼呢", "准吗", "能说的确切
-    一些吗？别那么含糊") to one that did ("我妈住院了" after one is not)."""
-    return bool(users) and (bool(ASTRO.search(users[-1])) or (len(users) > 1 and len(users[-1]) <= 20 and
-                                                             bool(ASTRO_MORE.search(users[-1]) and ASTRO.search(users[-2]))))
+    """He is on astrology, MBTI or a personality read: his last line says so, or it is a short follow-up ("那双鱼呢",
+    "准吗", "能说的确切一些吗？别那么含糊") to one that did ("我妈住院了" after one is not)."""
+    return bool(users) and (is_astro(users[-1]) or (len(users) > 1 and len(users[-1]) <= 20 and
+                                                    bool(ASTRO_MORE.search(users[-1])) and is_astro(users[-2])))
+
+
+def deep_read(users):
+    """He wants his chart / type read in depth (分析、剖析、详细……), not a passing remark."""
+    return astro_turn(users) and bool(DEEP.search(users[-1]))
+
+
+# Cognitive-function stacks (dominant, auxiliary, tertiary, inferior): the usual MBTI reading, so a type is more than its
+# one-line label when he wants it explored.
+FUNC = {"Ni": "内倾直觉：往深处看一件事的走向和本质，常常说不清理由就先“知道”了", "Ne": "外倾直觉：往外发散可能性，一个点能联想出一串",
+        "Si": "内倾感觉：拿过去的经验和身体的感受做参照，重细节、重惯例", "Se": "外倾感觉：活在眼前的现场和感官里，反应快、上手快",
+        "Ti": "内倾思考：在心里搭一套自洽的道理，要“说得通”", "Te": "外倾思考：按外面的标准和效率把事情组织起来，看结果",
+        "Fi": "内倾情感：以自己心里认的价值为准，在乎真不真", "Fe": "外倾情感：感知和照顾身边人的情绪、场上的气氛"}
+STACK = {"INFJ": "Ni Fe Ti Se", "INTJ": "Ni Te Fi Se", "ENFJ": "Fe Ni Se Ti", "ENTJ": "Te Ni Se Fi",
+         "INFP": "Fi Ne Si Te", "INTP": "Ti Ne Si Fe", "ENFP": "Ne Fi Te Si", "ENTP": "Ne Ti Fe Si",
+         "ISFJ": "Si Fe Ti Ne", "ISTJ": "Si Te Fi Ne", "ESFJ": "Fe Si Ne Ti", "ESTJ": "Te Si Ne Fi",
+         "ISFP": "Fi Se Ni Te", "ISTP": "Ti Se Ni Fe", "ESFP": "Se Fi Te Ni", "ESTP": "Se Ti Fe Ni"}
+GRIP = {"Se": "压力大时容易突然沉进感官刺激（吃、刷、买），或者对眼前的小事格外烦躁", "Ne": "压力大时脑子里冒出一串最坏的可能，越想越像真的",
+        "Si": "压力大时揪着身体的不舒服和过去的失败不放，变得钻细节", "Ni": "压力大时突然觉得一切没意义，对以后有说不清的不祥预感",
+        "Ti": "压力大时变得挑刺、冷冰冰，给自己和别人挑逻辑毛病", "Te": "压力大时突然强硬苛刻，非要立刻把事理清，骂自己没效率",
+        "Fi": "压力大时情绪一下涌上来，觉得没人懂自己", "Fe": "压力大时突然特别在意别人怎么看自己，觉得被讨厌了"}
+
+
+def mbti_block(code):
+    s = STACK.get((code or "").upper())
+    if not s:
+        return ""
+    f = s.split()
+    return ("【他的 MBTI】%s（他自己填的或自己说的；MBTI 是一种性格说法，不是诊断）。按通行的认知功能说法，四个功能从强到弱：%s。"
+            "劣势功能是 %s：%s。" % (code.upper(), "；".join("%s %s（%s）" % (r, x, FUNC[x]) for r, x in
+                                                     zip(("主导", "辅助", "第三", "劣势"), f)), f[3], GRIP[f[3]]))
+
+
+ANALYZE_NOTE = ("【深入分析】他要你分析他的性格（星座、八字、紫微、MBTI 这些）：这是要深聊，不是点到为止。"
+                "先把他手上有的几样说清（盘上排出来的、他自己说的；他自己报的跟盘上不一样或盘上没有，以他说的为准），然后往深里走："
+                "每一样不只说它代表什么，要说它在他身上大概怎么运转：什么场景会冒出来，背后在护着什么，代价是什么；"
+                "把几样放在一起看，哪几样互相加强，哪几样在拉扯（相位、元素多寡、八字强弱、MBTI 的主导和劣势功能都可以拿来说），拉扯在日常里是什么样子；"
+                "落到具体：跟人相处和亲密关系里、做事和工作里、压力大的时候、容易卡住的盲点、怎么用好它。"
+                "每个说法都要能指出来自哪一样（“这是月亮双鱼那一面”“这是 Ni 在起作用”），不说空的形容词，不说谁都套得上的话。"
+                "可以长，分七八段，八九百字到一千字，用你自己的说话方式说，不列点。")
 
 
 # Forecasts about health and fate that the astrology talk must never give (2026-11-24 a tester, pressed for "确切一些", was
 # told when a family member's illness would ease). The prompt says so; this drops any such sentence that still slips through.
+# Chart talk turning 疾厄宫 / 化忌 into the body ("廉贞化忌在疾厄，是身体和情绪容易被拖", 导师 2026-11-24 test) even when told not to.
+BODY = (r"身体[^。！？\n]{0,12}(?:被拖|拖累|消耗|透支|出问题|吃不消|不好|要注意|多注意|容易累|扛不住)"
+        r"|疾厄[^。！？\n]{0,24}(?:身体|健康|病)")
 PREDICT = re.compile(r"(?:病|病情|身体|健康|住院|手术|寿命|灾|血光|车祸|官司|破财|离婚)[^。！？\n]{0,24}"
                      r"(?:好转|缓和|稳下来|好起来|加重|恶化|出事|应验|躲不过|化解|有救|没救)")
 
-# "出生早上7点45分", "我是晚上8点生的", "7:45出生": a birth time he says in chat counts when the profile has none.
-BIRTH_TIME = re.compile(r"(?:出生|生的|生于|生辰|出生时间)[^\d\n]{0,8}?(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|夜里)?\s*(\d{1,2})\s*"
-                        r"(?:[:：]\s*(\d{2})|[点时]\s*(?:(\d{1,2})\s*分?|(半))?)"
-                        r"|(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|夜里)?\s*(\d{1,2})\s*(?:[:：]\s*(\d{2})|[点时]\s*(?:(\d{1,2})\s*分?|(半))?)\s*(?:出生|生的)")
+# Birth details he says in chat. A tester (2026-11-24) answered "把出生时间给我" with "大概是下午五点四十左右", "就五点四十"
+# and "17.40": none was recognised (only digits next to 出生 were), so the chart never got its 时辰, 紫微 stayed "排不了"
+# and the selves sent her to edit her profile or bring a chart from another app, which she can't send here. A time counts
+# when the line says it is a birth time (出生、生的、时辰……) or is nothing but a time, given right after a question about
+# it; it wins over the profile's (he is correcting it) and the page saves it. A date or city only fills a blank.
+_CN = dict(zip("零〇一二两三四五六七八九", (0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9)))
+_NUM = r"\d{1,2}|[零〇一二两三四五六七八九十]{1,3}"
+_PART = r"凌晨|半夜|早上|早晨|清晨|上午|中午|下午|傍晚|晚上|夜里"
+CLOCK = re.compile(r"(%s)?\s*(?<![\d.:：])(%s)\s*(?:[:：]\s*(\d{2})(?!\d)|(\.)(\d{2})(?![\d.])|[点點时時]\s*(?:(半|一刻|三刻)|(%s)\s*分?)?)"
+                   % (_PART, _NUM, _NUM))
+# A time is his birth time when a birth word sits next to it ("五点四十出生的", "出生时间是17:40") or 生 follows it directly
+# ("五点四十生的"). A bare 生的 / 点生 anywhere in the line also matched 陌生的、学生的、发生的、有点生气、差一点生病.
+BIRTH_WORD = re.compile(r"出生|生于|生辰|时辰|时柱|几点生")
+BORN_AFTER = re.compile(r"\s*(?:左右|前后|多|那会儿?|的时候)?\s*生(?:的|于)?(?![气病意活命人])")
+MY_BIRTHDAY = re.compile(r"(?:^|我的?|本人的?)\s*生日")  # not 我妈生日
+ASKED_TIME = re.compile(r"出生的?(?:具体|准确)?时间|几点几分|时辰|时柱|几点(?:出)?生|出生.{0,8}几点")
+TIME_FILLER = re.compile(r"大概|大约|差不多|应该是?|可能|估计|好像|据说|就是?|是|在|我|的|了|左右|前后|那会儿?|时候|出生|生"
+                         r"|准确|具体|时间|呢|吧|啊|呀|哦|嗯|哈|[，,。.!！~～\s]")
+BIRTH_DATE = re.compile(r"(?<!\d)((?:19|20)\d{2})\s*[年./-]\s*(\d{1,2})\s*[月./-]\s*(\d{1,2})(?!\d)")
+BIRTH_CITY = re.compile(r"(?:出生地|出生城市|出生在|出生于|(?<![发产诞衍])生[在于]|出生的?[，,]\s*(?=在))\s*(?:是|在)?\s*([一-鿿]{2,12})")
 
 
-def said_birth_time(users):
-    """The latest birth time he stated in these lines, as 'HH:MM', or ''."""
-    for line in reversed(users):
-        m = BIRTH_TIME.search(line or "")
-        if not m:
+def _int(s):
+    """'17' 17, '五' 5, '十七' 17, '四十五' 45, '零五' 5; None for anything else."""
+    try:
+        if s.isdigit():
+            return int(s)
+        a, ten, b = s.partition("十")
+        return (_CN[a] if a else 1) * 10 + (_CN[b] if b else 0) if ten else int("".join(str(_CN[c]) for c in s))
+    except (KeyError, ValueError):
+        return None
+
+
+def _clause(line, a, b):
+    """The clause of `line` around line[a:b] ("我是1990年出生的，下午三点要开会": the 下午三点 clause has no 出生)."""
+    stops = "，。！？,!?；;\n"
+    start = max(line.rfind(c, 0, a) for c in stops) + 1
+    ends = [i for i in (line.find(c, b) for c in stops) if i >= 0]
+    return line[start:min(ends) if ends else len(line)]
+
+
+def birth_in(line, asked, slot=""):
+    """{time, date, city} stated in one line of his; asked = the self's line just before it."""
+    out, said = {}, BIRTH_WORD.search(line)
+    for m in CLOCK.finditer(line):
+        part, h, mm, dot, dm, half, mi = m.groups()
+        h, mi = _int(h), {"半": 30, "一刻": 15, "三刻": 45}[half] if half else _int(mm or dm or mi or "0")
+        bare = not TIME_FILLER.sub("", line.replace(m.group(), "", 1)) and ASKED_TIME.search(asked)
+        near = BORN_AFTER.match(line, m.end()) or BIRTH_WORD.search(_clause(line, m.start(), m.end()))
+        if h is None or mi is None or not (bare or near and (not dot or h >= 13)):  # "8.12出生" is a date
             continue
-        g = m.groups()
-        part, h, mm, mi, half = g[0:5] if g[1] else g[5:10]
-        h, mi = int(h), int(mm or mi or 0) if not half else 30
-        if part in ("下午", "傍晚", "晚上") and h < 12 or part == "夜里" and 6 <= h < 12:
+        if part in ("下午", "傍晚", "晚上") and h < 12 or part in ("夜里", "半夜") and 6 <= h < 12 or part == "中午" and h < 6:
             h += 12
-        if 0 <= h < 24 and 0 <= mi < 60:
-            return "%02d:%02d" % (h, mi)
-    return ""
+        elif part in ("凌晨", "晚上", "夜里", "半夜") and h == 12:
+            h = 0
+        elif not part and h < 12 and paipan.SLOTS.get(slot, (0,))[0] >= 12:  # "五点四十" from someone who picked 下午
+            h += 12
+        if h < 24 and mi < 60:
+            out["time"] = "%02d:%02d" % (h, mi)
+            break
+    m = BIRTH_DATE.search(line) if said or MY_BIRTHDAY.search(line) else None
+    if m:
+        try:
+            out["date"] = datetime.date(*map(int, m.groups())).isoformat()
+        except ValueError:
+            pass
+    m = BIRTH_CITY.search(line)
+    city = re.split(_PART + r"|的|人|出生", m.group(1))[0] if m else ""
+    if len(city) >= 2:
+        out["city"] = city
+    return out
+
+
+def said_birth(hist, slot="", time=""):
+    """What he said in this history about his birth (later lines win), and what his last line said ({} if nothing).
+    slot / time = the profile's; a time without 上午/下午 ("记错了，是五点二十出生的") takes the half of the day of the
+    time he gave before."""
+    found, prev, got = {}, "", {}
+    for h in hist:
+        said = str(h.get("content") or "")
+        if h.get("role") == "user":  # a picture's birth data may be someone else's chart: not his
+            half = slot or ("下午" if (found.get("time") or time or "00") >= "12" else "")
+            got = {} if said.startswith(IMAGE_MARK) else birth_in(said, prev, half)
+            found.update(got)
+        else:
+            prev, got = said, {}
+    return found, got
+
+
+def astro_now(hist):
+    """astro_turn, plus a line that gives his birth time ("17.40" after "几点几分出生") so the chart comes with it (a city
+    alone doesn't: "我生在农村，从小……" is his story, not a chart question)."""
+    users = [str(h.get("content") or "") for h in hist if h.get("role") == "user"]
+    return astro_turn(users[-2:]) or "time" in said_birth(hist)[1]
 
 
 def astro_run(hist):
@@ -634,7 +906,7 @@ def astro_run(hist):
     for i in range(last, -1, -1):  # his last line always stays (a follow-up astro_turn accepted may not match below)
         said = str(hist[i].get("content") or "")
         if hist[i].get("role") == "user":
-            if i < last and not (ASTRO.search(said) or len(said) <= 12 or len(said) <= 20 and ASTRO_MORE.search(said)):
+            if i < last and not (is_astro(said) or len(said) <= 12 or len(said) <= 20 and ASTRO_MORE.search(said)):
                 break
             start = i
     return hist[start:]
@@ -689,6 +961,57 @@ def pick_move(pid, users, last_ai, avoid, ask):
     return ids[0] if ids else random.choice([i for i in lib if i not in avoid] or list(lib))
 
 
+# 实事 (client 2026-11-25, comparing one work-decision question across four apps — should I meet someone before a
+# meeting: 导师 gave two roads, their costs and "你自己心里那杆秤……其实已经知道了"; 元宝、豆包、Grok gave a verdict, why,
+# what to talk about and when not to go). The selves were built for heavy hearts: 导师 never decided for him and handed the
+# choice back (路子 m6), 伙伴 said "这个我也拿不准". A practical matter he lays out and asks about now gets an answer:
+# a verdict, the reasons from his situation, the next steps, and when the other choice is better (persona
+# 【他问一件实际的事】). A cheap pattern first; a short model call tells a practical ask from a heavy heart ("好难受怎么办").
+PRACTICAL_HINT = re.compile(r"该不该|要不要|需不需要|用不用|值不值|划不划算|[去见接借买投换签卖选]不[去见接借买投换签卖选]|还是不|选哪|哪个好|哪个更"
+                            r"|需要[^。！？\n]{0,30}吗|怎么办|怎么(?:做|弄|搞|谈|说|讲|写|准备|安排|选|处理|应对|开口|回|跟|跟进|定价|报价)"
+                            r"|如何|帮我(?:分析|看看|想想|出个?主意|参谋|捋|理|算)|分析一下|出个?主意|建议|方案|计划|策略|可行吗|行不行|合适吗"
+                            r"|有没有必要|(?:聊|说|谈|带|准备|问|注意)(?:些|点)?什么")
+PRACTICAL_PROMPT = ("判断他最后这句话要的是哪一种回应，只输出“实事”或“心事”两个字。\n"
+                    "实事：他在问一件实际的事该怎么办、该不该、要不要、怎么准备、怎么选、怎么谈，要你帮他分析、出主意。比如工作上的安排、"
+                    "生意和合作、谈判报价、出差见人、开会提案、面试考试、找工作和跳槽的条件、学习、给孩子选学校、买东西、钱借不借、"
+                    "跟人怎么沟通一件具体的事。带着一点紧张或着急也算，只要他问的是这件事怎么办。\n"
+                    "心事：他在说心里的难受、委屈、累、烦、自责、迷茫，想被安慰、被理解、把情绪理清；或者是感情、家人、朋友里的伤心事"
+                    "（要不要分手、要不要原谅、怎么面对父母催婚）；或者只丢来一句“想辞职”“要不要回老家”，没摆出具体条件；或者只是闲聊。")
+PRACTICAL_NOTE = ("这一条是实事：他问的是一件实际的事，要你帮他拿主意。照你人格档案里【他问一件实际的事】来："
+                  "先亮出你的判断，再从他的处境里说理由，再说具体怎么做，最后说什么情况下另一个选择更好。"
+                  "不把选择推回给他，不收在“怎么定是你的”“你心里已经有答案了”这类话上。")
+PRACTICAL_FOLLOW = "这是接着聊：前面给过的判断和理由不再说一遍，接着他这句往下说具体的。"
+PRACTICAL_CAP = {"bange": 1500, "pingzuo": 1200}  # 字; the 元宝、豆包、Grok answers he compared ran 1500-3000
+FUTURE_ASK = re.compile(r"未来|接下来|今后|往后|以后|明年|后年|(?:19|20)?\d{2}年|时间节点|时间点|哪一?年|几月|什么时候|流年|运势|走势")
+FUTURE_CAP = 1600  # 字, 导师 giving 时间节点 (see reply_limits)
+PRACTICAL_TOKENS = 2600
+
+
+STEP_INLINE = re.compile(r"(?<=[。！？；：:])[ \t]*(?=[1-9][.．、](?!\d)|[一二三四五六七八九][，、](?![一二三四五六七八九]))")
+
+
+LEAD_IN = re.compile(r"^(?:先说|先给|先亮|直接说|结论先说)(?:我的|你)?(?:判断|结论|看法)?(?:吧|是)?[：:，,]\s*")
+
+
+def practical_tidy(reply):
+    """An answer to a practical question: no hand-back ending (HANDBACK), no announcer's lead-in ("先说判断："), and
+    steps run into one paragraph ("具体这么弄。1. …。2. …") each start a line, as the prompt asks."""
+    reply = LEAD_IN.sub("", drop_stock_end(reply, HANDBACK))
+    return "\n".join(STEP_INLINE.sub("\n", p) if len(STEP_INLINE.findall(p)) >= 2 else p for p in reply.split("\n"))
+
+
+def practical_ask(users, ask):
+    """True when his last line lays out a practical matter and asks what to do (see PRACTICAL_PROMPT)."""
+    last = users[-1].strip() if users else ""
+    if len(last) < 8 or astro_turn(users) or not PRACTICAL_HINT.search(last):
+        return False
+    said = "\n".join("他：" + u for u in users[-3:])
+    try:
+        return "实事" in (ask([{"role": "system", "content": PRACTICAL_PROMPT}, {"role": "user", "content": said}]) or "")
+    except LLMError:
+        return False
+
+
 def views_block(pid, ids):
     cards = [view_library(pid)[i] for i in ids if i in view_library(pid)]
     if not cards:
@@ -726,9 +1049,43 @@ def user_block(req):
     return "【这位用户】\n称呼：%s" % (clip(req.get("nick"), 12) or "朋友")
 
 
-def build_messages(pid, req, know=None, views="", move=None):
+def plan_reply(pid, hist, ask, avoid=()):
+    """What /api/chat settles before writing a reply (tools/run_eval.py and chatlog replay use it too, so they match):
+    whether this is astrology or a practical ask, which view cards, which route. ask(msgs) -> text, a short model call."""
+    users = [clip(h.get("content"), 300) for h in hist[-6:] if h.get("role") == "user"]
+    astro = astro_now(hist)
+    practical = not astro and practical_ask(users, ask)
+    last_ai = next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
+    return {"users": users, "astro": astro, "practical": practical,
+            "views": [] if astro or practical else pick_views(pid, users, ask),  # the view cards are about feelings
+            "move": None if astro or practical else pick_move(pid, users, last_ai, list(avoid), ask)}
+
+
+def reply_limits(pid, plan, cap):
+    """(max_tokens, cap in 字) for this reply; cap = what memory.DEPTH allows for this user."""
+    if plan["practical"]:
+        return PRACTICAL_TOKENS, PRACTICAL_CAP[pid]
+    # 导师's 时间节点 run 1300-2100 字; cut to a new user's 900, whole years went missing (the client wants every year)
+    if pid == "bange" and plan["astro"] and plan["users"] and FUTURE_ASK.search(plan["users"][-1]):
+        return PRACTICAL_TOKENS, FUTURE_CAP
+    # a full read of his chart / type: the "just met" length limit is for comfort, not for this
+    return CHAT_MAX_TOKENS, REPLY_MAX if deep_read(plan["users"]) else cap
+
+
+def finish_reply(pid, plan, msgs, raw, cap, told=False):
+    """The model's text -> what he sees: length cap, safety lines, stock endings, the practical tidy, no forecasts."""
+    reply = postprocess(msgs[-1]["content"], fit(raw, cap), " ".join(plan["users"]), told, pid)
+    if plan["practical"]:
+        reply = practical_tidy(reply)
+    if plan["astro"] and (PREDICT.search(reply) or re.search(BODY, reply)):
+        reply = drop_sentences(reply, PREDICT.pattern + "|" + BODY)
+    return reply
+
+
+def build_messages(pid, req, know=None, views="", move=None, saved=None, practical=False):
     """Chat: persona + who the user is (+ what the selves know) (+ view cards for what he is talking about) + the last
-    16 turns."""
+    16 turns. saved = birth details he just gave in chat that are now in req["birth"] (see said_birth); practical = he
+    asks what to do about a practical matter (see practical_ask)."""
     ctx = [user_block(req)]
     # The page writes the summary to him ("你习惯边说边想……"); handed over like that, the selves quoted it back as something
     # he had said ("你上回说过，你习惯边说边想"). Third person makes it a description, not his words.
@@ -741,19 +1098,40 @@ def build_messages(pid, req, know=None, views="", move=None):
         ctx.append("用户标了“不像我”的画像条目（不要再拿这些说事）：" + notme)
     ctx.append(know or NEW_USER_LINE)
     hist = req.get("history") or []
-    last_ai = next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
-    astro = astro_turn([str(h.get("content") or "") for h in hist if h.get("role") == "user"][-2:])
+    if not hist:
+        raise ValueError("empty history")
+    last_ai =next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
+    astro = astro_now(hist)
     if astro:
         hist = astro_run(hist)
+    last = str(hist[-1].get("content") or "") if hist else ""
+    deep = astro and deep_read([str(h.get("content") or "") for h in hist if h.get("role") == "user"])
     chart = birth_chart(req.get("birth")) if astro else None
-    if chart:  # only while he is on it (otherwise it creeps into everything), and only the systems he is asking about
-        ctx.append(paipan.chart_text(chart, chart_parts(str(hist[-1].get("content") or ""))))
+    # only while he is on it (otherwise it creeps into everything), and only the systems he is asking about; an MBTI-only
+    # question ("infj和哪种mbti最适配") gets no chart
+    parts = chart_parts([str(h.get("content") or "") for h in hist if h.get("role") == "user"]) \
+        if ASTRO.search(last) or ANALYZE.search(last) or not TYPING.search(last) else []
+    if chart and parts:
+        ctx.append(paipan.chart_text(chart, parts))
+        if pid == "bange":  # the years 导师 gives 时间节点 from (see FUTURE_NOTE)
+            ctx.append(paipan.years_text(chart, datetime.date.today(), parts=parts))
+    if astro and (TYPING.search(last) or deep):
+        code = MBTI_TYPE.search(last) or MBTI_TYPE.search(clip(req.get("profile"), 800))
+        if code:
+            ctx.append(mbti_block(code.group(1)))
     if views:
         ctx.append(views)
     # The selves don't know about each other (user 2026-11-23): no name of, or referral to, the other one.
     now = "【此刻】日期 %s（你心里有数就行，回复里不说今天、今晚这类时间词）。" % datetime.date.today().isoformat()
     if astro:
-        now += ASTRO_NOTE
+        now += ASTRO_NOTE + FUTURE_NOTE[pid] + (ANALYZE_NOTE if deep else "")
+    if saved:
+        now += SAVED_NOTE % "、".join(BIRTH_FIELD[k] + saved[k] for k in BIRTH_FIELD if saved.get(k))
+    if chart and parts:
+        stale, hist = stale_claims(chart, hist)
+        now += stale
+    if last.startswith(IMAGE_MARK):
+        now += IMAGE_NOTE
     full = req.get("history") or []
     if full and any(same_line(full[-1].get("content"), h.get("content")) for h in full[:-1] if h.get("role") == "user"):
         now += REPEAT_NOTE
@@ -766,6 +1144,9 @@ def build_messages(pid, req, know=None, views="", move=None):
     # (陪 → 列他那几件事 → 不是……是…… → 许可) and list his troubles a second time.
     follow = len(last_ai) >= 150 and not astro
     route = moves(pid).get(move) if move else None
+    if practical:
+        now += PRACTICAL_NOTE + (PRACTICAL_FOLLOW if follow else "")
+        follow, route = False, None
     if follow:
         now += ("这是接着聊：你上一条已经说了一大段，这一条接着他刚说的这一句往下走，上一条说过的（他的处境、那几件事、"
                 "你的安慰、看法和给过的建议）不再说一遍，也不再从头陪一遍、理一遍。" + ("" if route else random.choice(FOLLOW_SHAPES[pid]) + "。"))
@@ -777,7 +1158,7 @@ def build_messages(pid, req, know=None, views="", move=None):
     if not astro and len(str(hist[-1].get("content") or "")) >= 6:  # the most worn device; the style rule alone didn't hold
         now += "这一条里“不是……是……”这种先否定再翻过来的句子最多一处，其余的直接说是什么。"
     if pid == "pingzuo":  # 客户：“说长一点，帮我分析化解情绪”；伙伴的档案处处说慢、说短，这里再把长度提一次
-        now += "这一条不提问，不用问号。" + ("" if astro or follow else
+        now += "这一条不提问，不用问号。" + ("" if astro or follow or practical else
                "他要是带着情绪、讲了一件压着他的事，就说长一点，说够四五段、每段三四句："
                "先陪着，再把他这股情绪理一理，再帮他化开一点；他只是随口一句，就短短地回。")
     elif "？" in last_ai or "?" in last_ai:  # users: "我说一句问我一句，更累了"
@@ -800,9 +1181,29 @@ def build_messages(pid, req, know=None, views="", move=None):
     return msgs
 
 
-def portrait_facts(sign, mbti, blood, animal):
-    return "\n".join(x for x in ("星座：%s座（%s象）" % (sign, SIGNS[sign]) if sign else "", "MBTI：" + mbti if mbti else "",
-                                 "血型：%s 型" % blood if blood else "", "生肖：" + animal if animal else "") if x)
+def portrait_facts(sign, mbti, blood, animal, chart=None):
+    """What the portrait read may use: what he filled in, plus (with a birth date) the computed chart and the MBTI
+    function stack, so the read goes past "狮子座：火象，直接" (user 2026-11-24: "浅尝辄止")."""
+    lines = ["星座：%s座（%s象）" % (sign, SIGNS[sign]) if sign else "", "MBTI：" + mbti if mbti else "",
+             "血型：%s 型" % blood if blood else "", "生肖：" + animal if animal else ""]
+    if mbti in STACK:
+        f = STACK[mbti].split()
+        lines.append("MBTI 认知功能（从强到弱）：主导 %s，辅助 %s，第三 %s，劣势 %s。%s" % (*f, "；".join(
+            "%s=%s" % (x, FUNC[x]) for x in f)))
+    if chart:
+        w, b, z = chart["west"], chart["bazi"], chart["ziwei"]
+        bodies = "、".join("%s%s%d°%s" % (x["name"], x["sign"], x["deg"], "（第%d宫）" % x["house"] if "house" in x else "")
+                          for x in w["bodies"] if x["sign"])
+        asc = ("上升%s" % w["asc"]["sign"]) if w["asc"] else ("上升可能是%s" % "、".join(w["asc_range"]) if w.get("asc_range") else "")
+        lines.append("星盘：%s%s。元素 %s。主要相位：%s。" % (bodies, "；" + asc if asc else "", w["elements"],
+                                                   "、".join(w["aspects"][:5]) or "无"))
+        lines.append("八字：%s，日主%s，粗看%s；五行 %s；十神分布 %s。" % (" ".join(b["pillars"]), b["dm"], b["strength"],
+                                                         " ".join("%s%d" % kv for kv in b["wuxing"].items()), b["god_count"]))
+        if z:
+            lines.append("紫微斗数：命宫在%s，主星%s；三方四正：%s。" % (
+                z["palaces"][0]["branch"], "、".join(z["palaces"][0]["main"]) or "无（借对宫）",
+                "；".join("%s %s" % (z["palaces"][i]["name"], "、".join(z["palaces"][i]["main"]) or "无主星") for i in (4, 8, 6))))
+    return "\n".join(x for x in lines if x)
 
 
 def build_portrait(facts, heard=None):
@@ -818,7 +1219,8 @@ def tidy_portrait(data, heard):
     def facets(v):
         return [{"h": clip(f.get("h"), 12), "t": clip(f.get("t"), 220)} for f in (v if isinstance(v, list) else [])[:5]
                 if isinstance(f, dict) and f.get("h") and f.get("t")]
-    return {"sign": facets(data.get("sign")), "mbti": facets(data.get("mbti")), "mix": clip(data.get("mix"), 320),
+    return {"sign": facets(data.get("sign")), "mbti": facets(data.get("mbti")), "astro": facets(data.get("astro")),
+            "bazi": facets(data.get("bazi")), "ziwei": facets(data.get("ziwei")), "mix": clip(data.get("mix"), 320),
             "heard": clip(re.sub(r"^从你说过的话里?看[，,：:]?", "", heard.strip("“”\"' \n")), 360)}  # the card already says it
 
 
@@ -948,8 +1350,9 @@ class App:
                           lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0])
         self.lock = threading.Lock()       # rate limits
         self.recent_moves = {}             # (uid, pid) -> the last two 路子 used, so the next reply takes another
+        self.geo = Geo(os.path.join(DATA_DIR, "geo.json"))
         self.disk_lock = threading.Lock()  # usage.json and the jsonl logs
-        self.hits = {k: defaultdict(deque) for k in ("tts", "chat", "asr", "fb")}
+        self.hits = {k: defaultdict(deque) for k in ("tts", "chat", "asr", "fb", "image")}
         for d in (CACHE_DIR, LOG_DIR):
             os.makedirs(d, exist_ok=True)
         self.usage_path = os.path.join(CACHE_DIR, "usage.json")
@@ -962,7 +1365,7 @@ class App:
     # -- limits
     def allow_ip(self, ip, kind):
         now = time.time()
-        limit = {"tts": PER_IP_PER_MIN, "chat": CHAT_PER_MIN, "asr": ASR_PER_MIN, "fb": FB_PER_MIN}[kind]
+        limit = {"tts": PER_IP_PER_MIN, "chat": CHAT_PER_MIN, "asr": ASR_PER_MIN, "fb": FB_PER_MIN, "image": IMAGE_PER_MIN}[kind]
         with self.lock:
             q = self.hits[kind][ip]
             while q and now - q[0] > 60:
@@ -995,48 +1398,97 @@ class App:
 
     def chat(self, pid, req, who):
         uid = req.get("u") if valid_uid(req.get("u")) else None
-        users = [clip(h.get("content"), 300) for h in (req.get("history") or [])[-6:] if h.get("role") == "user"]
-        birth = req.get("birth") if isinstance(req.get("birth"), dict) else None
-        said_time = said_birth_time([str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") == "user"])
-        if birth and birth.get("date") and not birth.get("time") and said_time:  # "出生早上7点45分" said in chat
-            req = dict(req, birth=dict(birth, time=said_time, slot=""))
-        know = self.mem.context(uid, " ".join(users[-3:]), pid, brief=astro_turn(users)) if uid else None
+        hist = req.get("history") or []
         ask = lambda m: self.llm(m, max_tokens=20, temperature=0, timeout=8)[0]
-        vids = pick_views(pid, users, ask)
-        last_ai = next((str(h.get("content") or "") for h in reversed(req.get("history") or []) if h.get("role") != "user"), "")
         key = (uid or who.get("ip"), pid)
-        move = pick_move(pid, users, last_ai, self.recent_moves.get(key, []), ask)
+        plan = plan_reply(pid, hist, ask, self.recent_moves.get(key, []))
+        users, astro, practical, vids, move = (plan[k] for k in ("users", "astro", "practical", "views", "move"))
+        locate = lambda city: self.geo.find(city, lambda m: self.llm(m, max_tokens=80, temperature=0, timeout=10)[0])
+        birth = dict(req["birth"]) if isinstance(req.get("birth"), dict) else {}
+        # only what his last line said: once the page has saved it, an older line must not undo a later edit of the profile
+        said = said_birth(hist, birth.get("slot"), birth.get("time"))[1]
+        saved = {"time": said["time"], "slot": ""} if said.get("time") and said["time"] != birth.get("time") else {}
+        saved.update({k: said[k] for k in ("date", "city") if said.get(k) and not birth.get(k)})
+        if saved.get("city"):
+            known = paipan.place(saved["city"])
+            if known and not known["approx"]:
+                saved["city"] = known["name"]  # "出生的，在杭州长大" -> 杭州
+            elif not (known or locate(saved["city"])):
+                del saved["city"]  # "出生在一个小县城"
+        birth.update(saved)
+        if birth.get("city") and astro:  # a 盘州 or a small town abroad: look it up once
+            birth["geo"] = locate(birth["city"]) or birth.get("geo")
+        if birth:
+            req = dict(req, birth=birth)
+        know = self.mem.context(uid, " ".join(users[-3:]), pid, brief=astro) if uid else None
         if move:
             with self.lock:
                 self.recent_moves[key] = [move] + self.recent_moves.get(key, [])[:1]
                 if len(self.recent_moves) > 5000:  # in-process only; a restart just forgets which routes were used
                     self.recent_moves.clear()
-        msgs = build_messages(pid, req, know, views_block(pid, vids), move)
-        raw, model, ms = self.llm(msgs, max_tokens=CHAT_MAX_TOKENS, timeout=40)
+        msgs = build_messages(pid, req, know, views_block(pid, vids), move, saved, practical)
+        tokens, cap = reply_limits(pid, plan, self.mem.reply_cap(uid, pid) if uid else REPLY_MAX)
+        raw, model, ms = self.llm(msgs, max_tokens=tokens, timeout=40)  # the page gives up at 45 s
         # A tester sent the same long message twice in one visit and got the same 587 字 back: with its own answer to that very
         # message right above, the model copied it. A reply that mostly repeats an earlier one is written once more.
-        earlier = [str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") != "user"]
+        earlier = [str(h.get("content") or "") for h in hist if h.get("role") != "user"]
         if earlier and max(overlap(raw, e) for e in earlier) > COPY_LIMIT:
             retry = [dict(msgs[0], content=msgs[0]["content"] + "\n\n" + REWRITE_NOTE)] + msgs[1:]
             try:
-                raw2, model, ms2 = self.llm(retry, max_tokens=CHAT_MAX_TOKENS, temperature=1.0, timeout=40)
+                raw2, model2, ms2 = self.llm(retry, max_tokens=tokens, temperature=1.0, timeout=40)
                 if max(overlap(raw2, e) for e in earlier) < max(overlap(raw, e) for e in earlier):
-                    raw, ms = raw2, ms + ms2
+                    raw, model, ms = raw2, model2, ms + ms2
             except LLMError:
                 pass  # the first reply still stands
-        cap = self.mem.reply_cap(uid, pid) if uid else REPLY_MAX
-        fitted = fit(raw, cap)
-        told = any("12356" in str(h.get("content") or "") for h in (req.get("history") or []) if h.get("role") != "user")
-        reply = postprocess(msgs[-1]["content"], fitted, " ".join(users), told, pid)
-        if astro_turn(users) and PREDICT.search(reply):
-            reply = drop_sentences(reply, PREDICT.pattern)
-        tid = self.log("chat", who, pid, req, user=msgs[-1]["content"], reply=reply, raw=raw if fitted != raw else None,
-                       cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, views=vids or None, move=move,
+        told = any("12356" in str(h.get("content") or "") for h in hist if h.get("role") != "user")
+        reply = finish_reply(pid, plan, msgs, raw, cap, told)
+        tid = self.log("chat", who, pid, req, user=msgs[-1]["content"], reply=reply, raw=raw if fit(raw, cap) != raw else None,
+                       cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, views=vids or None,
+                       move="实事" if practical else move,
                        hist=req.get("history"), profile=clip(req.get("profile"), 800) or None,
-                       birth=req.get("birth") if isinstance(req.get("birth"), dict) else None)
+                       birth=req.get("birth") if isinstance(req.get("birth"), dict) else None, saved=saved or None)
         if uid and self.mem.append(uid, pid, [("user", clip(msgs[-1]["content"], 1000)), ("ai", reply)]) >= 8:
             self.fold_pool.submit(self.fold, uid, 8)
-        return {"reply": reply, "model": model, "ms": ms, "tid": tid}
+        out = {"reply": reply, "model": model, "ms": ms, "tid": tid}
+        if saved:  # the page keeps it in his profile, so the next visit (and the other self) has it too
+            out["birth"] = saved
+        return out
+
+    def see(self, req, who):
+        """A picture he sent -> {seen: what is in it, as text}. The picture is kept next to the logs (see IMAGE_DIR)."""
+        m = IMAGE_URL.fullmatch(str(req.get("image") or "").strip())
+        if not m:
+            raise ValueError("need a jpeg, png or webp data URL")
+        raw = base64.b64decode(re.sub(r"\s", "", m.group(2)))
+        if not 0 < len(raw) <= IMAGE_MAX_BYTES:
+            raise ValueError("bad image size")
+        if not self._bump("image_calls", 1, IMAGE_DAILY):
+            raise DailyCap()
+        url = "data:image/%s;base64,%s" % (m.group(1), base64.b64encode(raw).decode())
+        ask = _read(SEE_PATH)
+        if not ask:  # without it the model analyses the chart itself instead of copying it out
+            raise LLMError("see-image prompt missing")
+        msgs = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}, {"type": "text", "text": ask}]}]
+        t0, text, err = time.time(), "", "no model"
+        for (endpoint, model), wait in zip(SEE_MODELS, (30, 45)):  # deepseek reads one in ~4 s; page waits 85 s, nginx 90
+            try:
+                text = strip_md(llm_call(endpoint, model, msgs, max_tokens=1600, temperature=0, timeout=wait, think=False))
+            except LLMError as e:
+                err = str(e)
+            if text:
+                break
+            sys.stderr.write("%s failed (%s)\n" % (model, err or "empty reply"))
+        if not text:
+            raise LLMError(err)
+        ms, pid = int((time.time() - t0) * 1000), str(req.get("p") or "")
+        tid = self.log("image", who, pid if pid in PERSONAS else None, req, reply=text, model=model, ms=ms, bytes=len(raw))
+        try:
+            os.makedirs(IMAGE_DIR, exist_ok=True)
+            with open(os.path.join(IMAGE_DIR, "%s-%s.%s" % (datetime.date.today().isoformat(), tid, m.group(1).replace("jpeg", "jpg"))), "wb") as f:
+                f.write(raw)
+        except OSError:
+            pass  # the description still goes back
+        return {"seen": fit(text, 1500), "model": model, "ms": ms, "tid": tid}
 
     def closing(self, pid, req, who):
         """One sentence that sums up the session, said when the user taps 结束本次对话."""
@@ -1075,11 +1527,15 @@ class App:
         if uid:
             s = self.mem.summary(uid)
             heard = "\n".join(([s["portrait"]] if s["portrait"] else []) + ["- " + n["text"] for n in s["notes"][:15]])
-        facts = portrait_facts(sign, mbti, blood, animal)
+        birth = req.get("birth") if isinstance(req.get("birth"), dict) else None
+        if birth and birth.get("city"):
+            geo = self.geo.find(birth["city"], lambda m: self.llm(m, max_tokens=80, temperature=0, timeout=10)[0])
+            birth = dict(birth, geo=geo) if geo else birth
+        facts = portrait_facts(sign, mbti, blood, animal, birth_chart(birth))
         with ThreadPoolExecutor(2) as pool:
             said = pool.submit(self.llm, build_portrait(facts, heard), 500, 0.8, 40) if heard else None
             for _ in range(2):  # now and then the model drops a section or renames its fields: ask once more
-                raw, model, ms = self.llm(build_portrait(facts), max_tokens=1400, timeout=60)
+                raw, model, ms = self.llm(build_portrait(facts), max_tokens=2800, timeout=45)  # real ones take 5-20 s
                 out = tidy_portrait(parse_json(raw) or {}, "")
                 if (out["sign"] or not sign) and (out["mbti"] or not mbti) and out["mix"]:
                     break
@@ -1123,7 +1579,14 @@ class App:
             pass
         if not self._bump("tts_chars", len(text), DAILY_CHAR_CAP):
             raise TTSError("DailyCap", "今日朗读字数已达上限")
-        data = self.tts.synth(text, voice, speed, "mp3", rate, emotion)
+        for tries in range(4):  # a long reply is 6-12 chunks at once; some voices refuse that many ("AccessLimit")
+            try:
+                data = self.tts.synth(text, voice, speed, "mp3", rate, emotion)
+                break
+            except TTSError as e:
+                if e.code not in ("LimitExceeded.AccessLimit", "RequestLimitExceeded") or tries == 3:
+                    raise
+                time.sleep(0.6 * (tries + 1) + random.random() * 0.6)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".%d.tmp" % threading.get_ident()
         with open(tmp, "wb") as f:
@@ -1229,19 +1692,42 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/self/wipe": self.handle_self, "/api/self/import": self.handle_self,
                    "/api/fb": self.handle_fb, "/api/event": self.handle_fb, "/api/asr": self.handle_asr,
                    "/api/tts": self.handle_tts, "/api/portrait": self.handle_portrait,
-                   "/api/chart": self.handle_chart}.get(path)
+                   "/api/chart": self.handle_chart, "/api/image": self.handle_image}.get(path)
         if not handler:
             return self.send_json(404, {"error": "not found"})
         return handler(path)
 
+    def handle_image(self, path):
+        """{u, p, image: data URL} -> {seen}: what is in the picture, for the page to send on as his message."""
+        try:
+            req = self.read_json(IMAGE_MAX_BYTES * 4 // 3 + 4000)
+        except (ValueError, TypeError):
+            return self.send_json(400, {"error": "bad request"})
+        if self.limited("image"):
+            return None
+        try:
+            return self.send_json(200, APP.see(req, self.who()))
+        except ValueError as e:
+            return self.send_json(400, {"error": str(e)})
+        except LLMError as e:
+            APP.log("error", self.who(), None, req, path=path, error=str(e)[:300])
+            return self.llm_failed(e)
+
     def handle_chart(self, path):
-        """排盘 for the portrait page: arithmetic only, no model call."""
+        """排盘 for the portrait page: arithmetic, plus one short model call the first time a birth place isn't in the table."""
         try:
             req = self.read_json(2000)
         except (ValueError, TypeError):
             return self.send_json(400, {"error": "bad request"})
         if self.limited("fb"):
             return None
+        if isinstance(req, dict) and req.get("city"):
+            try:
+                geo = APP.geo.find(req["city"], lambda m: APP.llm(m, max_tokens=80, temperature=0, timeout=10)[0])
+            except LLMError:
+                geo = None
+            if geo:
+                req = dict(req, geo=geo)
         chart = birth_chart(req)
         return self.send_json(200, chart) if chart else self.send_json(400, {"error": "need a birth date"})
 

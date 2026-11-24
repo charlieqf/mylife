@@ -7,6 +7,7 @@
 时间：出生地的钟表时间按 zoneinfo 换成世界时（中国 1986–1991 年的夏令时也算进去）。八字、紫微的时辰用出生地的
 真太阳时（经度 + 均时差），23 点起算第二天（子初换日）。农历按北京时间。没填城市按北京时间、不做真太阳时校正。
 """
+import collections
 import datetime
 import functools
 import math
@@ -610,16 +611,58 @@ def _to_utc(local, tz):
     return (loc - loc.utcoffset()).replace(tzinfo=None), loc.dst() or datetime.timedelta()
 
 
+ELEMENT = dict(zip(SIGNS, "火土风水" * 3))
+MODALITY = {s: ["基本", "固定", "变动"][i % 3] for i, s in enumerate(SIGNS)}
+ASPECTS = [("合", 0, 8), ("冲", 180, 8), ("拱", 120, 7), ("刑", 90, 7), ("六合", 60, 5)]
+GOD_GROUP = {"比肩": "比劫", "劫财": "比劫", "食神": "食伤", "伤官": "食伤", "偏财": "财", "正财": "财", "七杀": "官杀", "正官": "官杀",
+             "偏印": "印", "正印": "印"}
+
+
+def aspects(points):
+    """[(name, lon)] -> the major aspects between them, tightest first: [(a, aspect, b, orb)]."""
+    out = []
+    for i, (a, la) in enumerate(points):
+        for b, lb in points[i + 1:]:
+            d = abs(la - lb) % 360
+            d = min(d, 360 - d)
+            for name, angle, orb in ASPECTS:
+                if abs(d - angle) <= orb:
+                    out.append((a, name, b, round(abs(d - angle), 1)))
+    return sorted(out, key=lambda x: x[3])
+
+
+def bazi_strength(pillars, dm):
+    """A rough read of the day master: support (same element + the one producing it) weighed against the rest, with the
+    month branch counted three times (得令). Schools differ; this is only a first look."""
+    me, mother = dm // 2, (dm // 2 - 1) % 5
+    elem = lambda c: GAN.index(c) // 2 if c in GAN else "木火土金水".index(ZHI_WX[ZHI.index(c)])
+    weights = []
+    for i, p in enumerate(pillars):
+        if i != 2:
+            weights.append((p[0], 1.0))
+        weights.append((p[1], 3.0 if i == 1 else 1.2))
+    total = sum(w for _, w in weights)
+    support = sum(w for c, w in weights if elem(c) in (me, mother))
+    r = support / total
+    season = "得令" if elem(pillars[1][1]) in (me, mother) else "失令"
+    return ("偏强" if r >= 0.55 else "偏弱" if r < 0.4 else "中和") + "（%s，生扶的字约占%d%%）" % (season, round(r * 100))
+
+
 @functools.lru_cache(maxsize=512)
-def chart(date, time="", slot="", city=""):
+def chart(date, time="", slot="", city="", geo=None):
     """Everything the page and the selves need. date 'YYYY-MM-DD'; time 'HH:MM' or ''; slot one of SLOTS or ''; city
-    free text or ''. Raises ValueError on a bad date."""
+    free text or ''; geo = (name, lat, lon, tz) for a city the table doesn't have (looked up by the server). Raises
+    ValueError on a bad date."""
     d, t = _parse(date, time)
     pl = place(city)
+    if geo and (not pl or pl["approx"]):  # a county the table only knew by its province
+        pl = {"name": geo[0], "lat": geo[1], "lon": geo[2], "tz": geo[3], "approx": False, "looked_up": True}
     tz = pl["tz"] if pl else _CN
     notes = []
-    out = {"date": d.isoformat(), "time": t.strftime("%H:%M") if t else "", "place": pl, "notes": notes}
-    if pl and pl["approx"]:
+    out = {"date": d.isoformat(), "time": t.strftime("%H:%M") if t else "", "slot": "" if t else slot, "place": pl, "notes": notes}
+    if pl and pl.get("looked_up"):
+        notes.append("出生城市“%s”按查到的大致经纬度算（%.2f, %.2f）" % (city, pl["lat"], pl["lon"]))
+    elif pl and pl["approx"]:
         notes.append("出生城市“%s”没在表里，按%s的位置估算" % (city, pl["name"]))
     elif city and not pl:
         notes.append("出生城市“%s”没认出来，时间按北京时间算，排不了上升和宫位" % city)
@@ -651,8 +694,10 @@ def chart(date, time="", slot="", city=""):
         pillars.append(GAN[(di % 5 * 2 + hb) % 10] + ZHI[hb])
         if local.hour >= 23:
             notes.append("真太阳时过了 23 点，按子时算第二天（子初换日）")
+        std = clock - dst
+        clock_hb = hour_branch(std) if pl else hb
     else:
-        hb = None
+        hb = clock_hb = None
         a0, a1 = (jie_month(sun_lon(tt(jd_ut(_to_utc(datetime.datetime.combine(d, x), tz)[0]))))
                   for x in (datetime.time(0), datetime.time(23, 59)))
         if a0 != a1:
@@ -665,7 +710,11 @@ def chart(date, time="", slot="", city=""):
         "pillars": pillars, "dm": GAN[dm] + GAN_WX[dm],
         "gods": ["%s干%s %s" % (w, p[0], ten_god(dm, GAN.index(p[0]))) for w, p in zip("年月日时", pillars) if w != "日"],
         "hidden": ["%s %s" % (p[1], CANG[ZHI.index(p[1])]) for p in pillars],
-        "wuxing": count, "missing": "".join(w for w, n in count.items() if not n), "nayin": NAYIN[ys // 2]}
+        "wuxing": count, "missing": "".join(w for w, n in count.items() if not n), "nayin": NAYIN[ys // 2],
+        "strength": bazi_strength(pillars, dm),
+        "god_count": " ".join("%s%d" % (g, n) for g, n in collections.Counter(
+            GOD_GROUP[ten_god(dm, GAN.index(c))] for c in [p[0] for i, p in enumerate(pillars) if i != 2] +
+            [CANG[ZHI.index(p[1])][0] for p in pillars]).most_common())}
 
     # -- 农历、紫微 (lunar date of the 八字 day, so 23:00 and later counts as the next day here too)
     ly, lm, ld, leap = lunar(day)
@@ -676,6 +725,16 @@ def chart(date, time="", slot="", city=""):
         if leap:
             notes.append("生在闰%s月：紫微按%s月排（闰月十五以前算本月，以后算下月）" % (MONTHS[lm], MONTHS[zm]))
         out["ziwei"] = ziwei((ly - 4) % 10, (ly - 4) % 12, zm, ld, hb)
+    if hb is not None and clock_hb != hb:
+        # most apps use the clock: a tester was told 酉时 乙酉 by the selves while the chart here said 申时 甲申
+        cday = std.date() + datetime.timedelta(days=1 if std.hour >= 23 else 0)
+        cy, cm, cdd, cleap = lunar(cday)
+        cz = ziwei((cy - 4) % 10, (cy - 4) % 12, cm % 12 + 1 if cleap and cdd > 15 else cm, cdd, clock_hb)["palaces"][0]
+        notes.append("%s %s 是%s时，按出生地真太阳时 %s 是%s时；这里八字、紫微都按真太阳时排。不少排盘工具默认直接用钟表时间，"
+                     "那样排是%s时、时柱%s、紫微命宫在%s（主星%s），所以和别处排的可能对不上，两种算法都有人用；钟表时间那一版这里不另排整张盘" % (
+                         "标准时间" if dst else "钟表时间", std.strftime("%H:%M"), ZHI[clock_hb], local.strftime("%H:%M"), ZHI[hb],
+                         ZHI[clock_hb], GAN[(day_index(cday) % 5 * 2 + clock_hb) % 10] + ZHI[clock_hb], cz["branch"],
+                         "、".join(cz["main"]) or "无"))
 
     # -- 星盘
     west = {"bodies": [], "asc": None, "mc": None}
@@ -699,6 +758,26 @@ def chart(date, time="", slot="", city=""):
         west["cusps"] = [round(c, 2) for c in cusps]
         for x in west["bodies"]:
             x["house"] = house_of(x["lon"], cusps)
+    elif pl and slot in SLOTS:  # only a part of the day: the signs the ascendant passes through in it
+        h0, h1 = SLOTS[slot]
+        seen = []
+        for minute in range(h0 * 60, h1 * 60 + 1, 15):
+            u = _to_utc(datetime.datetime.combine(d, datetime.time()) + datetime.timedelta(minutes=minute), tz)[0]
+            s = sign_deg(angles(jd_ut(u), pl["lat"], pl["lon"])[3])[0]
+            if s not in seen:
+                seen.append(s)
+        west["asc_range"] = seen
+    signs = [x["sign"] for x in west["bodies"] if x["sign"]] + ([west["asc"]["sign"]] if west["asc"] else [])
+    west["elements"] = " ".join("%s%d" % (e, sum(ELEMENT[s] == e for s in signs)) for e in "火土风水")
+    west["modes"] = " ".join("%s%d" % (m, sum(MODALITY[s] == m for s in signs)) for m in ("基本", "固定", "变动"))
+    pts = [(x["name"], x["lon"]) for x in west["bodies"] if x["sign"] and (x["name"] != "月亮" or t)]
+    if west["asc"]:
+        pts.append(("上升", west["cusps"][0]))
+    west["aspects"] = ["%s%s%s（差%s°）" % a for a in aspects(pts)[:10]]
+    if west.get("cusps"):
+        crowd = collections.Counter(x["house"] for x in west["bodies"])
+        west["stellium"] = ["第%d宫：%s" % (h, "、".join(x["name"] for x in west["bodies"] if x["house"] == h))
+                            for h, n in crowd.most_common() if n >= 2]
     out["west"] = west
     out["items"] = _items(out, slot, city)
     out["sections"] = _sections(out, date, time or slot, city)
@@ -771,14 +850,18 @@ def _sections(c, date, time, city):
         "年月日时" if len(b["pillars"]) == 4 else "年月日；没出生时间，没有时柱", " ".join(b["pillars"]), b["dm"],
         "，".join(b["gods"]), "；".join(b["hidden"]), " ".join("%s%d" % kv for kv in b["wuxing"].items()),
         "，缺" + b["missing"] if b["missing"] else "，五行都有", b["nayin"])
+    bazi += "\n  粗看日主%s；十神分布（天干和地支本气）：%s。" % (b["strength"], b["god_count"])
     if z:
         ming = z["palaces"][0]
         ziwei = "- 紫微斗数：命宫在%s（%s），%s；身宫在%s，落在%s。%s。生年四化：%s。\n  十二宫：%s" % (
             ming["branch"], ming["gz"], "主星" + "、".join(ming["main"]) if ming["main"] else
             "没有主星（借对宫迁移宫的%s）" % "、".join(z["palaces"][6]["main"]), z["shen"], z["shen_in"], z["ju"], z["hua"],
             "；".join("%s %s：%s" % (p["name"], p["gz"], "、".join(p["main"] + p["minor"]) or "无") for p in z["palaces"]))
+        ziwei += "\n  命宫的三方四正（命宫、财帛、官禄、迁移，看一个人的格局主要看这四宫）：%s。" % "；".join(
+            "%s %s" % (z["palaces"][i]["name"], "、".join(z["palaces"][i]["main"]) or "无主星") for i in (0, 4, 8, 6))
     else:
-        ziwei = "- 紫微斗数：没出生时间，排不了。"
+        ziwei = ("- 紫微斗数：排不了：要知道几点几分出生（至少落在哪个时辰），只知道“%s”这种时段不够。" % c["slot"] if c.get("slot")
+                 else "- 紫微斗数：没出生时间，排不了：要知道几点几分出生。")
     parts = []
     for x in w["bodies"]:
         if not x["sign"]:
@@ -789,9 +872,97 @@ def _sections(c, date, time, city):
     if w["asc"]:
         parts += ["上升 " + _sign_word(w["asc"]), "天顶 " + _sign_word(w["mc"])]
     west = "- 星盘（回归黄道%s）：%s。%s" % ("，Placidus 分宫" if w["asc"] else "", "；".join(parts),
-                                       "" if w["asc"] else "没有出生时间和出生城市，排不了上升和宫位。")
+                                       "" if w["asc"] else "没有准确的出生时间和出生城市，排不了上升和宫位。")
+    if w.get("asc_range"):
+        west += "按“%s”这个时段，上升可能是%s（看几点出生）。" % (time, "、".join(w["asc_range"]))
+    west += "\n  元素：%s；模式：%s（上面这些行星%s各算一个）。" % (w["elements"], w["modes"], "和上升" if w["asc"] else "")
+    if w["aspects"]:
+        west += "\n  主要相位（越靠前越紧）：%s。" % "；".join(w["aspects"])
+    if w.get("stellium"):
+        west += "\n  行星扎堆的宫：%s。" % "；".join(w["stellium"])
     notes = "- 说明：" + "；".join(c["notes"]) + "。" if c["notes"] else ""
     return {"head": "\n".join(head), "bazi": bazi, "ziwei": ziwei, "west": west, "notes": notes}
+
+
+CHONG = {frozenset(x) for x in ("子午", "丑未", "寅申", "卯酉", "辰戌", "巳亥")}
+LIUHE = {frozenset(x) for x in ("子丑", "寅亥", "卯戌", "辰酉", "巳申", "午未")}
+GANHE = {frozenset(x) for x in ("甲己", "乙庚", "丙辛", "丁壬", "戊癸")}
+TRANSIT_ASPECTS = (("合", 0), ("冲", 180), ("刑", 90), ("拱", 120))
+
+
+def _months(ms):
+    """[(y, m), ...] sorted -> '2026年3月–5月；2026年11月' (consecutive months joined)."""
+    runs = []
+    for y, m in ms:
+        if runs and (y * 12 + m) - (runs[-1][1][0] * 12 + runs[-1][1][1]) == 1:
+            runs[-1][1] = (y, m)
+        else:
+            runs.append([(y, m), (y, m)])
+    say = lambda a, b: "%d年%d月" % a + ("" if a == b else "–%s月" % b[1] if a[0] == b[0] else "–%d年%d月" % b)
+    return "；".join(say(a, b) for a, b in runs)
+
+
+def years_text(c, today, n=3, parts=("bazi", "ziwei", "west")):
+    """【流年和行运】 for the n years from today: each year's 八字 pillar against his (十神, 冲/合/伏吟), the 紫微 流年命宫
+    and 流年四化, and where Jupiter and Saturn go over his chart in the next two years. 导师 reads 时间节点 off this
+    (client 2026-11-24: "导师星象分析……给出时间节点和重要事件") instead of making the years up."""
+    out = ["【流年和行运】程序按他的盘算的往后几年（八字、紫微的流年，木星土星的行运）。讲时间节点只照这里说，这里没有的不编。"]
+    b, z, w = c["bazi"], c["ziwei"], c["west"]
+    years = [(y, gz((y - 4) % 60)) for y in range(today.year, today.year + n)]  # 立春前后差一个月，按年说就够了
+    if "bazi" in parts:
+        dm, rows = GAN.index(b["dm"][0]), []
+        for y, g in years:
+            s, br = g
+            main = CANG[ZHI.index(br)][0]
+            bits = ["天干%s是%s，地支%s（本气%s）是%s" % (s, ten_god(dm, GAN.index(s)), br, main, ten_god(dm, GAN.index(main)))]
+            for spot, p in zip(("年柱", "月柱", "日柱", "时柱"), b["pillars"]):
+                if p == g:
+                    bits.append("和%s相同（伏吟）" % spot)
+                if frozenset((br, p[1])) in CHONG:
+                    bits.append("%s冲%s的%s" % (br, spot, p[1]))
+                if frozenset((br, p[1])) in LIUHE:
+                    bits.append("%s合%s的%s" % (br, spot, p[1]))
+                if frozenset((s, p[0])) in GANHE:
+                    bits.append("%s合%s的%s" % (s, spot, p[0]))
+            if br == b["pillars"][0][1]:
+                bits.append("本命年")
+            rows.append("  %d %s年：%s。" % (y, g, "；".join(bits)))
+        out.append("- 八字流年（年柱管祖辈和早年，月柱管父母和工作环境，日支是夫妻宫，时柱管子女和往后；"
+                   "没有出生性别就不排大运）：\n" + "\n".join(rows))
+    if z and "ziwei" in parts:
+        where = {s[:2]: p["name"] for p in z["palaces"] for s in p["main"] + p["minor"]}
+        rows = []
+        for y, g in years:
+            ming = next(p for p in z["palaces"] if p["branch"] == g[1])
+            hua = [SIHUA[g[0]][i:i + 2] for i in range(0, 8, 2)]
+            rows.append("  %d %s年：流年命宫在%s（本命%s，%s）；流年四化：%s。" % (
+                y, g, g[1], ming["name"], "主星" + "、".join(ming["main"]) if ming["main"] else "无主星",
+                "，".join("%s化%s（在%s%s）" % (st, h, where.get(st, "盘上没有"),
+                                            "：只当压力和精力讲，不讲身体" if where.get(st) == "疾厄宫" else "")
+                         for st, h in zip(hua, "禄权科忌"))))
+        out.append("- 紫微流年：\n" + "\n".join(rows))
+    if "west" in parts:
+        natal = [(x["name"], x["lon"]) for x in w["bodies"] if x["sign"] and (x["name"] != "月亮" or c["time"])]
+        cusps = w.get("cusps")
+        if cusps:
+            natal += [("上升", cusps[0]), ("天顶", cusps[9])]
+        seen = collections.defaultdict(list)
+        start = datetime.datetime.combine(today, datetime.time(12))
+        for k in range(0, 74):  # every 10 days for about two years
+            t = start + datetime.timedelta(days=10 * k)
+            ym, jde = (t.year, t.month), tt(jd_ut(t))
+            for body in ("木星", "土星"):
+                lon = planet_lon(body, jde)
+                where = "%s在%s" % (body, sign_deg(lon)[0]) + ("（他的第%d宫）" % house_of(lon, cusps) if cusps else "")
+                hits = [where] + ["%s%s他的%s" % (body, a, name) for name, nl in natal for a, ang in TRANSIT_ASPECTS
+                                  if abs((lon - nl - ang + 180) % 360 - 180) <= 2 or ang and abs((lon - nl + ang + 180) % 360 - 180) <= 2]
+                for h in hits:
+                    if ym not in seen[h]:
+                        seen[h].append(ym)
+        rows = ["  %s：%s" % (h, _months(ms)) for h, ms in sorted(seen.items(), key=lambda kv: (kv[1][0], kv[0]))]
+        out.append("- 木星、土星行运（往后两年；木星走到哪儿，哪方面顺一些、机会多；土星走到哪儿，哪方面压力和功课多）：\n"
+                   + "\n".join(rows))
+    return "\n".join(out)
 
 
 def chart_text(c, parts=("bazi", "ziwei", "west")):

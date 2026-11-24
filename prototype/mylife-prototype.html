@@ -397,7 +397,18 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 .rec .bars i{width:4px;height:6px;border-radius:2px;background:currentColor;transition:height .08s}
 .rec b{display:block;font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
 .rec span{display:block;font-size:12px;opacity:.8;margin-top:2px}
-.composer .mic{color:var(--ink-3)}
+.composer .mic,.composer .pic{color:var(--ink-3)}
+.composer .pic:disabled{opacity:.4}
+@media (max-width:360px){.composer{gap:5px;padding-left:9px;padding-right:9px}.composer .icon-btn{width:40px;height:40px}.composer textarea{padding:10px 13px}}  /* 320 宽的手机：输入框别被按钮挤得太窄 */
+/* 发来的图片：气泡里放小图，点开看大图 */
+.bubble.has-pic{padding:5px}
+.bubble img.pic{display:block;max-width:220px;max-height:300px;border-radius:15px;cursor:zoom-in}  /* 别用百分比：气泡会按原图宽度撑开 */
+.bubble.has-pic div{max-width:220px}
+.bubble.has-pic div{padding:6px 9px 3px}
+.row.me.fail .bubble::after{content:'没发出去';display:block;padding:4px 9px 2px;font-size:12px;color:var(--danger)}
+.pic-view{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;padding:16px}
+.pic-view.on{display:flex}
+.pic-view img{max-width:100%;max-height:100%;border-radius:6px}
 
 /* 弹层 */
 .mask{position:absolute;inset:0;background:rgba(48,44,84,.26);opacity:0;pointer-events:none;transition:opacity .25s;z-index:20}
@@ -447,7 +458,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 <body>
 
 <aside class="desk-note">
-  <h1>MyLife 内测原型 v0.13</h1>
+  <h1>MyLife 内测原型 v0.16</h1>
   <p>用手机浏览器打开，体验最接近真实效果。</p>
   <p>流程：起个称呼 →（选填）资料与性格画像 → 选“理性”或“陪伴” → 聊天。</p>
   <p>回复由大模型实时生成（模型在后台固定）；服务器不可用时退回预设脚本。八字、紫微、星盘按生日、出生时间、出生城市真实排盘（真太阳时校正）。长按任意一条消息（电脑上右键）可以复制或选一部分文字。聊天记录存在本机浏览器；长期记忆和对话内容存在服务器上（对话留存供内测团队查看）。</p>
@@ -542,6 +553,8 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
         <button class="icon-btn mic" id="btn-mic" type="button" aria-label="切换到语音输入" style="display:none"></button>
         <textarea id="in-msg" rows="1" placeholder="说说你在想的事…"></textarea>
         <button class="hold" id="btn-hold" type="button">按住 说话</button>
+        <button class="icon-btn pic" id="btn-pic" type="button" aria-label="发图片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 15.5l-4.8-4.8L6 19.5"/></svg></button>
+        <input type="file" id="f-pic" accept="image/*" hidden>
         <button class="icon-btn send" id="btn-send" aria-label="发送" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       </div>
     </div>
@@ -579,7 +592,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
       <div class="section-t">关于</div>
       <div class="group">
         <div class="item"><div class="grow">它们都是 AI<small>两个都是“另一个你”，由 AI 生成，知道的都是你告诉它们的，不代表任何真实人物。不提供医疗、法律或投资建议。</small></div></div>
-        <div class="item"><div class="grow">版本<small>内测原型 v0.13 · 另一个你 · 长期记忆 · 彩虹卡 · 真实排盘</small></div></div>
+        <div class="item"><div class="grow">版本<small>内测原型 v0.16 · 另一个你 · 长期记忆 · 彩虹卡 · 真实排盘 · 发图片</small></div></div>
         <button class="item" id="btn-admin"><div class="grow">管理后台<small>原型演示：对话记录、人格档案、用户画像、热点</small></div></button>
       </div>
       <div style="height:20px"></div>
@@ -642,6 +655,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
   </div>
   <div class="rb-stage" id="rb-stage" role="dialog" aria-modal="true" aria-label="彩虹卡"></div>
   <div class="toast" id="toast"></div>
+  <div class="pic-view" id="pic-view" role="dialog" aria-label="图片"><img alt="图片"></div>
 </div>
 
 <script>
@@ -659,7 +673,7 @@ select.field{background-image:linear-gradient(45deg,transparent 50%,var(--ink-3)
 var NS='mylife.v3.';
 var store={
   get:function(k,d){try{var v=localStorage.getItem(NS+k);return v?JSON.parse(v):d}catch(e){return d}},
-  set:function(k,v){try{localStorage.setItem(NS+k,JSON.stringify(v))}catch(e){}},
+  set:function(k,v){try{localStorage.setItem(NS+k,JSON.stringify(v));return true}catch(e){return false}},
   clear:function(){try{Object.keys(localStorage).forEach(function(k){if(k.indexOf(NS)===0)localStorage.removeItem(k)})}catch(e){}}
 };
 
@@ -811,7 +825,10 @@ var S={
   autoRead:store.get('autoRead',null),calib:store.get('calib',{}),measured:{},
   cur:'bange',busy:false,hold:0,listening:0,userCount:{bange:0,pingzuo:0},entered:{}
 };
-function save(){store.set('logs',S.logs);store.set('sessions',S.sessions)}
+// 发过的图片缩略图存在聊天记录里：存不下了（Safari 本地存储约 5 MB）就从最早的图删起，再存，聊天文字不丢
+function save(){
+  for(var keep=PIC_KEEP;!store.set('logs',S.logs)&&keep>0;){keep=Math.floor(keep/2);prunePics(keep)}
+  store.set('sessions',S.sessions)}
 
 /* ================= 工具 ================= */
 function $(s){return document.querySelector(s)}
@@ -1148,12 +1165,12 @@ function loadChart(){
     .then(function(){if(CH.sig===sig)CH.p=null});
 }
 function loadPortraitMore(){
-  var A=analyze(),sig=[A.sign,A.mbti,(S.profile||{}).blood,A.animal,Math.ceil(((S.self||{}).n||0)/5)].join('|');  // 记住的事每多 5 条重写一次
+  var A=analyze(),sig=[A.sign,A.mbti,(S.profile||{}).blood,A.animal,JSON.stringify(birthOf()),Math.ceil(((S.self||{}).n||0)/5)].join('|');  // 资料改了、记住的事每多 5 条，重写一次
   if(!CHAT.ok||!(A.sign||A.mbti)||(PTX.sig===sig&&(PTX.data||PTX.p)))return;
   var c=store.get('ptx',null);
   if(c&&c.sig===sig&&c.data){PTX={sig:sig,p:null,data:c.data};return}
   PTX={sig:sig,p:null,data:null};
-  PTX.p=postJSON('/api/portrait',{u:S.uid,sign:A.sign,mbti:A.mbti,blood:(S.profile||{}).blood||'',animal:A.animal},70000)
+  PTX.p=postJSON('/api/portrait',{u:S.uid,sign:A.sign,mbti:A.mbti,blood:(S.profile||{}).blood||'',animal:A.animal,birth:birthOf()},100000)  // 带上出生信息：星盘、八字、紫微也展开讲
     .then(function(d){if(PTX.sig===sig){PTX.data=d;store.set('ptx',{sig:sig,data:d})}})
     .catch(function(){})  // 没写成：只留下面那几句固定的，下次打开再试
     .then(function(){if(PTX.sig!==sig)return;PTX.p=null;if($('#s-portrait').classList.contains('on'))renderPortrait()});
@@ -1188,7 +1205,7 @@ function renderPortrait(){
   if(X&&X.mix)list.push({key:'mix',label:'放在一起看',text:X.mix,cls:' wide'});
   if(X&&X.heard)list.push({key:'heard',label:'从你说过的话看',text:X.heard,cls:' wide heard'});
   list.concat([by.blood,by.astro,by.ziwei,by.bazi]).forEach(function(it){
-    var more=!it.miss&&X&&Array.isArray(X[it.key])&&X[it.key].length?X[it.key]:null,wait=!it.miss&&!X&&PTX.p&&(it.key==='sign'||it.key==='mbti');
+    var more=!it.miss&&X&&Array.isArray(X[it.key])&&X[it.key].length?X[it.key]:null,wait=!it.miss&&!X&&PTX.p&&/^(sign|mbti|astro|bazi|ziwei)$/.test(it.key);
     h+='<div class="pi'+(it.miss?' miss':'')+(it.cls||'')+'" data-k="'+it.key+'"><div class="h"><b>'+esc(it.label)+'</b>'+(it.sample?'<span class="tag">示例</span>':'')+'</div><p>'+esc(it.text)+'</p>';
     if(more)h+='<dl class="fx">'+more.map(function(f){return '<dt>'+esc(f.h)+'</dt><dd>'+esc(f.t)+'</dd>'}).join('')+'</dl>';
     else if(wait)h+='<div class="fx-wait">正在细看…<i></i><i></i><i></i></div>';
@@ -1236,7 +1253,9 @@ var ICON_DOWN=ICON_UP.replace('<svg ','<svg style="transform:rotate(180deg)" ');
 var ICON_COPY='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 9V6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15H9"/></svg>';
 function nodeFor(m){
   var row=document.createElement('div');row.dataset.id=m.id;
-  if(m.role==='user'){row.className='row me';row.innerHTML='<div class="bubble"></div>';row.firstChild.textContent=m.text}
+  if(m.role==='user'){row.className='row me'+(m.fail?' fail':'');row.innerHTML='<div class="bubble"></div>';
+    var bb=row.firstChild;if(!m.img){bb.textContent=m.text}
+    else{bb.className='bubble has-pic';bb.innerHTML='<img class="pic" alt="图片">'+(m.cap?'<div></div>':'');bb.firstChild.src=m.img;if(m.cap)bb.lastChild.textContent=m.cap}}
   else if(m.role==='ai'){
     row.className='row ai';
     row.innerHTML='<div class="bubble"></div><div class="fb"><button class="spk" data-speak aria-label="朗读这条">'+ICON_VOL+'</button><button data-copy aria-label="复制这条">'+ICON_COPY+'</button><button data-fb="1" aria-label="有用">'+ICON_UP+'</button><button data-fb="-1" aria-label="不好">'+ICON_DOWN+'</button></div>';
@@ -1266,6 +1285,7 @@ function msgById(id){return S.logs[S.cur].filter(function(x){return x.id===id})[
 function paintFb(row,v){row.querySelectorAll('[data-fb]').forEach(function(b){b.classList.toggle('on',+b.dataset.fb===v)})}
 msgs.addEventListener('click',function(e){
   if(PRESS.fired){PRESS.fired=false;return}  // 长按松手带出来的这一下点击不算
+  var pic=e.target.closest('img.pic');if(pic){var pm=msgById(pic.closest('.row').dataset.id);$('#pic-view img').src=(pm&&PIC_FULL[pm.id])||pic.src;$('#pic-view').classList.add('on');return}
   var bub=e.target.closest('.row.ai:not(.last) .bubble');if(bub){bub.parentNode.classList.toggle('show-fb');return}
   var cp=e.target.closest('[data-copy]');if(cp){copyMsg(cp.closest('.row'));return}
   var sp=e.target.closest('[data-speak]');
@@ -1656,13 +1676,15 @@ function chatContext(){
 function chatHistory(list,n,clip){
   var seen={};  // 同一张卡只算一次（菜单里重看不算又抽了一张）
   return list.filter(function(m){
+    if(m.img&&!m.seen)return false;  // 没看成的图不算
     if(m.role!=='rainbow')return m.role==='user'||m.role==='ai';
     if(!m.opened||!cardById(m.card)||seen[m.card])return false;
     return seen[m.card]=true;
   }).slice(-(n||16)).map(function(m){
     // 卡算这个“你”念给他听的，不算他说的话：他之后的第一句照第一次说。别写成括号里的第三人称旁白，模型会学着在回复里写给自己的备注
     if(m.role==='rainbow')return {role:'assistant',content:'彩虹卡：「'+cardById(m.card).t+'」'};
-    return {role:m.role==='user'?'user':'assistant',content:String(m.text).slice(0,clip||(m.role==='user'?2000:1000))}});
+    var text=m.seen?'【图片】'+m.seen+(m.cap?'\n'+m.cap:''):m.text;  // 服务器看图写下的内容（见 sendPic），后面另起一行是他打的字
+    return {role:m.role==='user'?'user':'assistant',content:String(text).slice(0,clip||(m.role==='user'?2000:1000))}});
 }
 function postJSON(url,body,ms){
   var ctl=window.AbortController?new AbortController():null,tm=ctl?setTimeout(function(){ctl.abort()},ms||30000):0;
@@ -1675,6 +1697,7 @@ async function replyLLM(){
   catch(e){ty.remove();return false}
   ty.remove();
   if(!d||!d.reply)return false;
+  if(d.birth)saveBirth(d.birth);
   if(who!==S.cur)return true;
   await say(d.reply,{wait:1,tid:d.tid});
   return true;
@@ -1721,7 +1744,7 @@ function greeting(id){
   return nick+'，来了啊。'+(q.kw.length>=2?'看了眼你的画像，说你'+q.kw[0]+'、'+q.kw[1]+'。像不像不要紧，':'')+'不用说什么大事，随便说说就行。';
 }
 var inMsg=$('#in-msg');
-function setSend(){$('#btn-send').disabled=S.busy||!inMsg.value.trim();var h=$('#btn-hold');if(h)h.disabled=S.busy||(typeof VOICE!=='undefined'&&VOICE.state==='sending')}
+function setSend(){$('#btn-send').disabled=S.busy||!inMsg.value.trim();$('#btn-pic').disabled=S.busy;var h=$('#btn-hold');if(h)h.disabled=S.busy||(typeof VOICE!=='undefined'&&VOICE.state==='sending')}
 function lastAt(id,role){return S.logs[id].reduce(function(a,m){return !role||m.role===role?Math.max(a,m.t||0):a},0)}
 // 进对话时先开口：服务器按两个人格共享的记忆接上刚才或上次的话（取不到就返回 false，退回固定招呼）
 async function openLine(id){
@@ -1791,6 +1814,39 @@ inMsg.addEventListener('input',function(){inMsg.style.height='auto';inMsg.style.
 inMsg.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
 $('#btn-send').addEventListener('click',send);
 function send(){var t=inMsg.value.trim();if(!t||S.busy)return;inMsg.value='';inMsg.style.height='auto';setSend();handle(t)}
+/* 发图片（客户 2026-11-24：要能发别处排的盘、别的图）：先给服务器看（/api/image，排盘截图逐宫逐柱抄成文字），
+   看到的内容当成他这条话，“另一个你”照着聊。本机只存小图，原图只在这次打开的页面里（点开看大图用） */
+var PIC_FULL={},PIC_KEEP=30;
+function shrink(file,max,q){return new Promise(function(ok,no){
+  var u=URL.createObjectURL(file),im=new Image();
+  im.onload=function(){var k=Math.min(1,max/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);
+    var x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);ok(c.toDataURL('image/jpeg',q))};
+  im.onerror=function(){URL.revokeObjectURL(u);no(new Error('bad image'))};im.src=u})}
+function prunePics(keep){keep=keep==null?PIC_KEEP:keep;var n=0;['bange','pingzuo'].forEach(function(id){for(var i=S.logs[id].length-1;i>=0;i--){var m=S.logs[id][i];if(m.img&&++n>keep)delete m.img}})}
+async function sendPic(file){
+  if(S.busy)return;
+  if(!CHAT.ok){toast('现在连不上，发不了图片');return}
+  S.busy=true;setSend();  // 压大图要一会儿：这时就别让再点一次
+  var full,thumb;
+  try{full=await shrink(file,2400,.85);thumb=await shrink(file,480,.72)}catch(e){S.busy=false;setSend();toast('这张图打不开，换一张试试');return}
+  var cap=inMsg.value.trim(),pid=S.cur,d=null;inMsg.value='';inMsg.style.height='auto';
+  dropCard();
+  var m={role:'user',text:'[图片]'+(cap?' '+cap:''),img:thumb,cap:cap};
+  push(m);PIC_FULL[m.id]=full;S.userCount[pid]++;prunePics();save();
+  var ty=typing();
+  try{d=await postJSON('/api/image',{u:S.uid,p:pid,nick:chatContext().nick,image:full},85000)}catch(e){}
+  ty.remove();
+  try{
+    if(!d||!d.seen){m.fail=true;save();var r=msgs.querySelector('.row[data-id="'+m.id+'"]');if(r)r.classList.add('fail');toast('图片没看成，再发一次试试');return}
+    m.seen=d.seen;save();
+    if(pid===S.cur&&!(await replyLLM()))toast('没接上话，再说一句试试');
+  }finally{S.busy=false;setSend();S.shownAt=Date.now()}
+}
+$('#btn-pic').addEventListener('click',function(){if(!S.busy)$('#f-pic').click()});
+$('#f-pic').addEventListener('change',function(){var f=this.files&&this.files[0];this.value='';if(f)sendPic(f)});
+$('#pic-view').addEventListener('click',function(){this.classList.remove('on')});
+// 聊天里说的出生时间（还有资料里空着的生日、城市）：服务器排盘用上了，这里存进资料，下次、另一个“你”也有
+function saveBirth(b){S.profile=Object.assign({},S.profile||{},b);store.set('profile',S.profile);loadChart()}
 
 /* ================= 语音输入：按住说话，松开发送 =================
    浏览器里录成 16k 单声道 WAV（服务器不需要转码），发到 /api/asr（腾讯云一句话识别，单次 ≤60 秒，不保存录音）。

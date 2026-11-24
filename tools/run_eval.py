@@ -46,20 +46,19 @@ def main():
 
     def run(c):
         req = {"nick": args.nick, "profile": args.profile, "history": c["turns"]}
-        users = [t["content"] for t in c["turns"][-6:] if t["role"] == "user"]
-        ask = lambda m: srv.complete(m, 20, 0, 8)[0]
-        vids = srv.pick_views(args.persona, users, ask)
-        last_ai = next((t["content"] for t in reversed(c["turns"]) if t["role"] != "user"), "")
-        move = srv.pick_move(args.persona, users, last_ai, [], ask)  # as /api/chat (no earlier routes in a one-off case)
-        msgs = srv.build_messages(args.persona, req, new_user_know(args.persona), srv.views_block(args.persona, vids), move)
+        # as /api/chat (a new user; no earlier routes in a one-off case)
+        plan = srv.plan_reply(args.persona, c["turns"], lambda m: srv.complete(m, 20, 0, 8)[0])
+        msgs = srv.build_messages(args.persona, req, new_user_know(args.persona), srv.views_block(args.persona, plan["views"]),
+                                  plan["move"], practical=plan["practical"])
+        tokens, cap = srv.reply_limits(args.persona, plan, depth(0, args.persona)[1])
         t0 = datetime.datetime.now()
         try:
-            said = " ".join(t["content"] for t in c["turns"][-6:] if t["role"] == "user")  # same as /api/chat
-            reply, err = srv.postprocess(msgs[-1]["content"], srv.fit(srv.llm_call(args.endpoint, args.model, msgs, srv.CHAT_MAX_TOKENS, timeout=40), depth(0, args.persona)[1]), said), None
+            raw = srv.llm_call(args.endpoint, args.model, msgs, tokens, timeout=40)
+            reply, err = srv.finish_reply(args.persona, plan, msgs, raw, cap), None
         except srv.LLMError as e:
             reply, err = None, str(e)
-        return dict(c, reply=reply, error=err, views=vids, secs=(datetime.datetime.now() - t0).total_seconds(),
-                    system_chars=len(msgs[0]["content"]))
+        return dict(c, reply=reply, error=err, views=plan["views"], move="实事" if plan["practical"] else plan["move"],
+                    secs=(datetime.datetime.now() - t0).total_seconds(), system_chars=len(msgs[0]["content"]))
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(run, cases))
@@ -80,7 +79,7 @@ def main():
         lines.append("- 期望：%s" % r.get("expect", ""))
         if r.get("avoid"):
             lines.append("- 不应：%s" % r["avoid"])
-        lines.append("- 耗时 %.1fs" % r["secs"])
+        lines.append("- 耗时 %.1fs%s" % (r["secs"], "；路子 %s" % r["move"] if r.get("move") else ""))
         lines.append("")
     with open(base + ".md", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

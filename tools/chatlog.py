@@ -159,15 +159,13 @@ def replay(args):
         sys.exit("no replayable chat records (need the new format with hist; run `pull` first)")
 
     def one(r):
-        users = [h.get("content", "") for h in r["hist"][-6:] if h.get("role") == "user"]
-        ask = lambda m: srv.complete(m, 20, 0, 8)[0]
-        vids = srv.pick_views(r["p"], users, ask)
-        last_ai = next((h.get("content", "") for h in reversed(r["hist"]) if h.get("role") != "user"), "")
-        move = srv.pick_move(r["p"], users, last_ai, [], ask)
+        plan = srv.plan_reply(r["p"], r["hist"], lambda m: srv.complete(m, 20, 0, 8)[0])  # as /api/chat
         req = {"nick": r.get("nick") or "朋友", "history": r["hist"], "profile": r.get("profile"), "birth": r.get("birth")}
-        msgs = srv.build_messages(r["p"], req, r.get("know"), srv.views_block(r["p"], vids), move)
-        text, model = srv.complete(msgs, srv.CHAT_MAX_TOKENS, timeout=40)
-        return srv.postprocess(msgs[-1]["content"], srv.fit(text, r.get("cap") or srv.REPLY_MAX))
+        msgs = srv.build_messages(r["p"], req, r.get("know"), srv.views_block(r["p"], plan["views"]), plan["move"],
+                                  r.get("saved"), plan["practical"])
+        tokens, cap = srv.reply_limits(r["p"], plan, r.get("cap") or srv.REPLY_MAX)
+        text, model = srv.complete(msgs, tokens, timeout=40)
+        return srv.finish_reply(r["p"], plan, msgs, text, cap)
 
     with ThreadPoolExecutor(4) as pool:
         new = list(pool.map(one, picks))

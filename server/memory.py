@@ -53,6 +53,7 @@ CONSOLIDATE_PROMPT = """你在帮一个人的“另一个自己”整理记忆�
 }
 写 add 的规则：不写他是跟哪个“自己”说的；只写他亲口说过的事实、处境、在意的人和东西、做过的决定、说过的心愿；带上具体的名字、时间、数字；不写建议，不评价，不写 AI 说了什么；AI 替他说出的心里话和猜测（比如“你心里那句……”“你其实是怕……”）不是他说的，一律不记，拿不准是谁说的就不记；已经记过的不重复写；没有就给空数组。
 标着“AI（只作上下文）”的行是 AI 说的：里面替他说的心里话、猜测、比方，都不是他说的，add 和 portrait 都不能用。
+标着“他发来的图”的行是图片里抄出来的内容（别人的盘、聊天截图）：可以记“你发过一张……的图”，图上的生日、八字、别人说的话不当成他的事记，除非他自己说了是他的。
 写 portrait 的规则：在原来的基础上改，不要推倒重写；写他的处境、在意的人和事、反复出现的心事和情绪、做事和说话的习惯、他常用的词和说法（用引号原样保留几个，只能是标着“他”的行里的原话）；只写聊天里他自己的话有根据的（AI 的猜测和替他说的话不算），不推测，不下诊断，不评判好坏。
 如果这次聊天里几乎没有新东西，episode 照写，add 给空数组，portrait 原样返回。"""
 
@@ -101,6 +102,7 @@ class Memory:
         os.makedirs(root, exist_ok=True)
         self.locks = {}
         self.busy = set()
+        self.wipes = {}  # uid -> times wiped in this process: a fold that was running across a wipe is dropped
         self.glock = threading.Lock()
 
     # ---------------------------------------------------------------- storage
@@ -183,6 +185,8 @@ class Memory:
     def wipe(self, uid):
         with self._lock(uid):
             shutil.rmtree(self._dir(uid), ignore_errors=True)
+            with self.glock:
+                self.wipes[uid] = self.wipes.get(uid, 0) + 1
 
     # ---------------------------------------------------------------- folding in
     def consolidate(self, uid, min_user=2):
@@ -193,6 +197,7 @@ class Memory:
             self.busy.add(uid)
         try:
             with self._lock(uid):
+                gen = self.wipes.get(uid, 0)
                 prof = self._load(uid)
                 if prof["msgs"] - prof["folded"] < min_user:
                     return None
@@ -210,6 +215,8 @@ class Memory:
                 return None
             pid = new[-1].get("p") if new else None
             with self._lock(uid):
+                if self.wipes.get(uid, 0) != gen:  # he cleared what the selves know while this fold was running
+                    return None
                 prof = self._load(uid)
                 drop = {str(x) for x in data.get("drop") or []}
                 have = {x["text"] for x in prof["notes"]}
@@ -258,7 +265,10 @@ class Memory:
         """One transcript line. The selves' lines are marked as AI context, so their guesses about him are not mistaken
         for things he said, and never carry a self's name (the selves must not seem to know about each other)."""
         who = {"user": "他", "card": "彩虹卡"}.get(r.get("role")) or "AI（只作上下文）"  # no self's name: which self heard it is never shown
-        return "%s：%s" % (who, " ".join(str(r.get("text", "")).split())[:n])
+        text = " ".join(str(r.get("text", "")).split())
+        if who == "他" and text.startswith("【图片】"):  # a chart or chat screenshot he sent may be someone else's
+            who = "他发来的图（图上的出生信息、别人说的话不算他的事，他自己说明了才算）"
+        return "%s：%s" % (who, text[:n])
 
     def just_said(self, uid, minutes=60):
         """His lines (to either self, folded or not) from the last `minutes`, oldest first, at most 6."""
