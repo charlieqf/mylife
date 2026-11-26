@@ -1211,6 +1211,8 @@ def records_needed(users, have, ask):
                     if m.group(1) else None
             except ValueError:
                 out[k] = None
+            if k == "sleep" and out[k] and out[k][0] == today:  # a night is kept under the evening it began: "我昨晚睡了
+                out[k] = (today - datetime.timedelta(days=1), out[k][1])  # 几个小时" came back as today only and found none
     return out
 
 

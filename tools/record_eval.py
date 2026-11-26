@@ -210,6 +210,12 @@ def offline():
     fake = lambda m, n=20: asked.append(m[1]["content"]) or "睡眠 %s~%s" % (DAY(-55)[:8] + "01", DAY(-25))
     got = srv.records_needed(["我这周睡得怎么样", "那上个月呢"], ["sleep", "diet"], fake)
     check(asked and list(got) == ["sleep"] and got["sleep"] and got["sleep"][0].day == 1, "追问“那上个月呢”也去判断，并带上日期范围", got)
+    got = srv.records_needed(["我昨晚睡了几个小时"], ["sleep"], lambda m, n=20: "睡眠 %s~%s" % (DAY(0), DAY(0)))
+    check(got.get("sleep") and got["sleep"][0].isoformat() == DAY(-1), "问“昨晚睡了几个小时”、模型给的是今天：也翻昨天那晚（一晚记在入睡那天）", got)
+    mem = fresh()
+    mem.record_put(UID, "sleep", {"t": datetime.datetime.now().isoformat(timespec="seconds"), "d": DAY(-1), "bed": "02:00", "wake": "07:00",
+                                  "hours": 5}, mem.record_ver(UID, "sleep"))
+    check("5 小时" in mem.record_block(UID, "sleep", *got["sleep"]), "那一晚在给回复看的记录里", mem.record_block(UID, "sleep", *got["sleep"])[-120:])
     got = srv.records_needed(["他又吃醋了", "我今天下午去公园散步了一大圈，天气特别好"], ["diet"], lambda m, n=20: "饮食")
     check(got == {}, "长句不借上一句的词", got)
     offline_round2()
@@ -867,6 +873,7 @@ def live():
     for users, want in (
             (["我今天一共吃了多少热量"], {"diet": recent}), (["我这周睡得怎么样"], {"sleep": recent}),
             (["我最近心情是不是好点了"], {"mood": recent}), (["这几天白天特别困，没精神"], {"sleep": recent}),
+            (["我昨晚睡了几个小时"], {"sleep": lambda span: span is None or span[0] <= TODAY - datetime.timedelta(days=1) <= span[1]}),
             (["他又吃醋了，烦死"], {}), (["累死了，睡一觉就好了"], {}), (["今天天气不错"], {}), (["被骂了好难受，不想说话"], {}),
             (["上个月我都吃了些什么"], {"diet": (last_month.replace(day=1), last_month)}),
             (["我这周睡得怎么样", "那上个月呢"], {"sleep": (last_month.replace(day=1), last_month)}),
