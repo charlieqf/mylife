@@ -47,7 +47,7 @@ def main():
     def run(c):
         req = {"nick": args.nick, "profile": args.profile, "history": c["turns"]}
         # as /api/chat (a new user; no earlier routes in a one-off case)
-        plan = srv.plan_reply(args.persona, c["turns"], lambda m: srv.complete(m, 20, 0, 8)[0])
+        plan = srv.plan_reply(args.persona, c["turns"], lambda m, n=20: srv.complete(m, n, 0, 8)[0])
         msgs = srv.build_messages(args.persona, req, new_user_know(args.persona), srv.views_block(args.persona, plan["views"]),
                                   plan["move"], practical=plan["practical"])
         tokens, cap = srv.reply_limits(args.persona, plan, depth(0, args.persona)[1])
@@ -57,7 +57,7 @@ def main():
             reply, err = srv.finish_reply(args.persona, plan, msgs, raw, cap), None
         except srv.LLMError as e:
             reply, err = None, str(e)
-        return dict(c, reply=reply, error=err, views=plan["views"], move="实事" if plan["practical"] else plan["move"],
+        return dict(c, reply=reply, error=err, views=plan["views"], move=plan["practical"] or plan["move"],
                     secs=(datetime.datetime.now() - t0).total_seconds(), system_chars=len(msgs[0]["content"]))
 
     with ThreadPoolExecutor(max_workers=4) as pool:

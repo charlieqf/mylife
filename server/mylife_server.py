@@ -2,10 +2,10 @@
 """MyLife phase-0 demo backend. Stdlib only; nginx serves the page, this process answers /api/*.
 
 Secrets come from the environment (systemd EnvironmentFile=/etc/mylife/secrets.env):
-  TENCENT_SECRET_ID, TENCENT_SECRET_KEY, TENCENT_TTS_REGION, TENCENT_TOKENHUB_API_KEY, DASHSCOPE_API_KEY
+  TENCENT_SECRET_ID, TENCENT_SECRET_KEY, TENCENT_TTS_REGION, TENCENT_TOKENHUB_API_KEY, DASHSCOPE_API_KEY, ARK_API_KEY (optional)
 
 Endpoints
-  GET  /api/health | /api/voices | /api/cards | /api/persona?p= | /api/self?u=
+  GET  /api/health | /api/voices | /api/cards | /api/persona?p= | /api/self?u= | /api/records?u=&kind=diet|sleep|mood
   POST /api/chat     {p, u, nick, profile, notme, birth, history} -> {reply, model, ms, tid}
   POST /api/chart    {date, time, slot, city}                 -> 排盘（八字、紫微、星盘，server/paipan.py）：{items, animal, text, ...}
   POST /api/card     {p, u, id}                               -> {ok}   今天抽到的彩虹卡记进长期记忆（卡由页面念，不接话）
@@ -14,6 +14,7 @@ Endpoints
   POST /api/portrait {u, sign, mbti, blood, animal}          -> {sign:[{h,t}], mbti:[{h,t}], mix, heard}  性格画像的展开
   POST /api/sync     {u}  fold the latest talk into long-term memory (server/memory.py)
   POST /api/self/forget {u, id} | /api/self/wipe {u} | /api/self/import {u, notes}
+  POST /api/records/delete {u, kind, id} | /api/records/clear {u, kind}   我的记录：饮食、睡眠、心情（memory.py）
   POST /api/fb       {p, u, tid, mid, v, reply, user}         👍/👎 on one reply
   POST /api/event    {p, u, kind: local|rating, ...}          what the page did on its own: scripted replies, session ratings
   POST /api/tts      {v, cps, p, t}  -> audio/mpeg (Tencent TextToVoice, cached per chunk)
@@ -28,6 +29,7 @@ import datetime
 import functools
 import hashlib
 import hmac
+import itertools
 import json
 import os
 import random
@@ -44,7 +46,8 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import paipan
-from memory import NEW_USER_LINE, Memory, parse_json, valid_uid, write_json_atomic
+from memory import (NEW_USER_LINE, RECORD_DAYS, RECORD_KINDS, RECORD_NAMES, Memory, meal_line, parse_json, parse_kcal, valid_uid,
+                    write_json_atomic)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOG_PATH = os.environ.get("MYLIFE_VOICES", os.path.join(HERE, "voices.json"))
@@ -243,6 +246,7 @@ def strip_id3(data):
 LLM_BASES = {
     "tokenhub": ("https://tokenhub.tencentmaas.com/v1", "TENCENT_TOKENHUB_API_KEY"),
     "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
+    "ark": ("https://ark.cn-beijing.volces.com/api/v3", "ARK_API_KEY"),  # 火山方舟: Doubao Seed (doubao-seed-2-1-lite-260915 ...)
 }
 CHAT_PRIMARY = (os.environ.get("MYLIFE_CHAT_ENDPOINT", "tokenhub"),
                 os.environ.get("MYLIFE_CHAT_MODEL", "deepseek-v4.1-flash"))
@@ -277,7 +281,7 @@ SEE_MODELS = ((os.environ.get("MYLIFE_SEE_ENDPOINT", "tokenhub"), os.environ.get
               ("dashscope", "qwen3.7-plus"))
 IMAGE_MAX_BYTES = 3_000_000  # the page sends a JPEG of at most 2400 px a side, usually 300-800 KB
 IMAGE_DAILY = int(os.environ.get("MYLIFE_IMAGE_DAILY", "500"))
-IMAGE_PER_MIN = 10
+IMAGE_PER_MIN = 20  # up to 6 pictures in one message, and he may swap a few before sending
 IMAGE_DIR = os.path.join(DATA_DIR, "images")  # kept with the logs while testing, to check a misread chart
 IMAGE_URL = re.compile(r"data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/=\s]+)")
 SIGNS = {"白羊": "火", "狮子": "火", "射手": "火", "金牛": "土", "处女": "土", "摩羯": "土",
@@ -405,6 +409,25 @@ def postprocess(user_text, reply, recent=None, told=False, pid=None):
     return reply
 
 
+def looping(text, times=4):
+    """A vision model stuck repeating one line (temperature 0 on a table of bowls: the same bowl seventy times)."""
+    lines = [l.strip() for l in (text or "").split("\n") if l.strip()]
+    return any(lines.count(l) >= times for l in set(lines))
+
+
+def unloop(text):
+    """Keep the first two of any repeated line and say the rest was dropped."""
+    out, seen, cut = [], {}, False
+    for l in (text or "").split("\n"):
+        k = l.strip()
+        seen[k] = seen.get(k, 0) + 1
+        if k and seen[k] > 2:
+            cut = True
+            continue
+        out.append(l)
+    return "\n".join(out).rstrip() + ("\n（有一处重复看了很多遍，可能没看清，数量按常理算）" if cut else "")
+
+
 def strip_md(text):
     """The page shows plain text: long chart reads came back with **星盘** headings and "- " bullets shown as is."""
     text = re.sub(r"\*\*|__|^#{1,6}[ \t]*", "", text, flags=re.M)
@@ -441,8 +464,8 @@ def llm_call(endpoint, model, messages, max_tokens=300, temperature=0.8, timeout
         raise LLMError("%s missing" % keyvar)
     body = {"model": model, "messages": messages, "temperature": temperature,
             "max_tokens": max_tokens, "stream": False}
-    if endpoint == "tokenhub" and model.startswith("deepseek"):
-        body["thinking"] = {"type": "disabled"}  # thinking adds ~1s and is not needed for chat
+    if endpoint == "ark" or endpoint == "tokenhub" and model.startswith("deepseek"):
+        body["thinking"] = {"type": "disabled"}  # thinking adds ~1s and is not needed for chat (Seed 2.x thinks by default too)
     if endpoint == "dashscope" and think is not None:
         body["enable_thinking"] = think  # qwen3.6+ think by default: 20-60 s to read a screenshot instead of a few
     req = urllib.request.Request(base + "/chat/completions", method="POST",
@@ -724,8 +747,16 @@ def stale_claims(chart, hist):
 
 
 IMAGE_MARK = "【图片】"  # the page's message for a picture: the mark, what the vision model saw, then his words if any
-IMAGE_NOTE = ("他发来一张图片：“【图片】”后面是看图写下的内容（他发的是图，不是这段字：就当你自己看到了这张图，"
-              "不说“你发的文字”“描述里”“截图上写着”；字后面另起一行的，才是他打的字）。照着图聊他想聊的。"
+WORDS_MARK = "【他说】"  # his words after his pictures, in the one message the model gets (build_messages)
+# A picture the vision model couldn't read: the page still sends it (review 2026-11-25: with it left out, "这些一共多少卡"
+# was answered from the other pictures as if they were the whole meal).
+IMAGE_LOST = IMAGE_MARK + "（这张图没看成，不知道上面是什么）"
+IMAGE_LOST_NOTE = ("有的“【图片】”后面写着“这张图没看成”：那张你没看到，别猜上面是什么。他要你拿这几张图算总数、做比较、对一对，"
+                   "就按看到的那几张算，并且明说少了一张没算进去，让他再发一次那张（或者说说上面是什么）再补上。")
+IMAGE_NOTE = ("他发来图片：每个“【图片】”后面是看图写下的一张图的内容（他发的是图，不是这段字：就当你自己看到了这些图，"
+              "不说“你发的文字”“描述里”“截图上写着”）；“【他说】”后面才是他打的字（以前的图，字在图的内容后面另起一行）。照他说的来：他要你拿图办事"
+              "（算热量、认东西、翻译、对一对、看盘），就照图把事办了。只发了图、一句话没说的，就照图上的东西自然地接一两句，"
+              "像朋友看到他发来的照片那样；不从图里推他的心思和处境，不编图外的事（几个人吃、为谁摆的、他这会儿什么状态）。"
               "图上是别处排的盘：就照图上的盘说；和【他的盘】有出入的地方（时辰、命宫、上升这些），点一句多半是出生时间或者算法"
               "（钟表时间还是真太阳时）不同，不争谁对。")
 
@@ -970,8 +1001,17 @@ def pick_move(pid, users, last_ai, avoid, ask):
 PRACTICAL_HINT = re.compile(r"该不该|要不要|需不需要|用不用|值不值|划不划算|[去见接借买投换签卖选]不[去见接借买投换签卖选]|还是不|选哪|哪个好|哪个更"
                             r"|需要[^。！？\n]{0,30}吗|怎么办|怎么(?:做|弄|搞|谈|说|讲|写|准备|安排|选|处理|应对|开口|回|跟|跟进|定价|报价)"
                             r"|如何|帮我(?:分析|看看|想想|出个?主意|参谋|捋|理|算)|分析一下|出个?主意|建议|方案|计划|策略|可行吗|行不行|合适吗"
-                            r"|有没有必要|(?:聊|说|谈|带|准备|问|注意)(?:些|点)?什么")
-PRACTICAL_PROMPT = ("判断他最后这句话要的是哪一种回应，只输出“实事”或“心事”两个字。\n"
+                            r"|有没有必要|(?:聊|说|谈|带|准备|问|注意)(?:些|点)?什么"
+                            # 办事 (client 2026-11-25: a photo of a meal and "计算一下卡路里" got "不算。这是你给自己找的下一件事"):
+                            # something to work out or make for him
+                            r"|计算|算(?:一下|一算|算|个|出|下|吧)|估(?:一下|算|个)|多少(?:卡|千卡|大卡|热量|钱|克|斤|度|分)|热量|卡路里"
+                            r"|翻译|帮我(?:写|查|找|列|改|做|翻|认|总结|整理|起|想|看下|检查|润色|算)|写(?:一[份篇个段封句条]|个|段|份)"
+                            r"|列(?:个|一下|一份|出)|清单|总结一下|整理一下|这是什么|是什么意思|什么意思|怎么读|怎么念|解释一下|识别"
+                            r"|这道题|怎么解|换算|对比一下|比较一下|哪个(?:贵|便宜|健康|热量|划算)")
+PRACTICAL_PROMPT = ("判断他最后这句话要的是哪一种回应，只输出“办事”“实事”“心事”中的一个词。\n"
+                    "办事：他要你直接做一件具体的事、把结果给他：算一个数（热量、卡路里、钱、时间、分数）、认图里的东西、翻译、"
+                    "解释一个词或一道题、写一段东西（周报、请假条、文案、要发给别人的消息）、列清单、整理总结、比一比两样东西。"
+                    "他前面发了图、这句让你拿图做什么，也是办事。\n"
                     "实事：他在问一件实际的事该怎么办、该不该、要不要、怎么准备、怎么选、怎么谈，要你帮他分析、出主意。比如工作上的安排、"
                     "生意和合作、谈判报价、出差见人、开会提案、面试考试、找工作和跳槽的条件、学习、给孩子选学校、买东西、钱借不借、"
                     "跟人怎么沟通一件具体的事。带着一点紧张或着急也算，只要他问的是这件事怎么办。\n"
@@ -980,11 +1020,274 @@ PRACTICAL_PROMPT = ("判断他最后这句话要的是哪一种回应，只输�
 PRACTICAL_NOTE = ("这一条是实事：他问的是一件实际的事，要你帮他拿主意。照你人格档案里【他问一件实际的事】来："
                   "先亮出你的判断，再从他的处境里说理由，再说具体怎么做，最后说什么情况下另一个选择更好。"
                   "不把选择推回给他，不收在“怎么定是你的”“你心里已经有答案了”这类话上。")
-PRACTICAL_FOLLOW = "这是接着聊：前面给过的判断和理由不再说一遍，接着他这句往下说具体的。"
+TASK_NOTE = ("这一条是办事：他要你直接办一件具体的事。照你人格档案里【他要你办一件事】来：痛快办了，结果放在最前面"
+             "（算的给出每一样和总数，写的给成稿，翻译的给译文，认的说清是什么）；他要了几样就给几样，一样不落（先翻译再回一句的，"
+             "先给译文，再给能直接发出去的那句，用原文的语言）。要估的说清按什么估（份量、做法），给个范围；数字用阿拉伯数字。"
+             "看图写下的内容要是明显不合常理（一桌几十碗、一个人十几瓶），按常理估，说一句图上这处可能没看清。"
+             "不拒绝，不说“这个不算”“这不归我管”，不把这件事往他的心事上引，也不琢磨他为什么要办这件事。")
+PRACTICAL_FOLLOW = {"实事": "这是接着聊：前面给过的判断和理由不再说一遍，接着他这句往下说具体的。",
+                    "办事": "这是接着聊：前面办过的不整段重来，照他这句补上、改好，结果还是放在最前面。"}
 PRACTICAL_CAP = {"bange": 1500, "pingzuo": 1200}  # 字; the 元宝、豆包、Grok answers he compared ran 1500-3000
 FUTURE_ASK = re.compile(r"未来|接下来|今后|往后|以后|明年|后年|(?:19|20)?\d{2}年|时间节点|时间点|哪一?年|几月|什么时候|流年|运势|走势")
 FUTURE_CAP = 1600  # 字, 导师 giving 时间节点 (see reply_limits)
 PRACTICAL_TOKENS = 2600
+
+# 专项记录 · 饮食、睡眠、心情 (client 2026-11-25: meals worked out from a photo or his words "要专门在一个“饮食”数据结构中
+# 长期保存记录累积下来……人格要能够查阅到这些记录"; then "做三种专项数据：饮食、睡眠、心情。都能够长期保存、积累、查阅、删除").
+# Writing: after a reply, if his turn touches a meal's calories, a night's sleep or how he feels, ONE short model call in the
+# background (App.note_records) pulls out what to keep; a follow-up about the same meal, night or stretch of talk updates
+# that record instead of adding one. Reading (user: the selves must know when to look and when not to): only kinds he has
+# records of, only when his words touch the topic (RECORD_HINT), and then a 20-token call decides (records_needed).
+RECORD_HINT = {"diet": re.compile(r"吃|喝|饭|餐|菜|零食|饮料|热量|卡路里|大卡|千卡|营养|蛋白质?|碳水|脂肪|减肥|减脂|增肌|体重|饮食|控糖|血糖|胖|瘦"),
+               "sleep": re.compile(r"睡|失眠|醒|熬夜|作息|午觉|午休|困|没精神|精神|累|疲|乏"),
+               "mood": re.compile(r"心情|情绪|状态|最近|这几天|这周|上周|这阵子|这段时间|一直|总是|老是|好点|好多了|比以前|比上")}
+RECORD_NEED_PROMPT = ("判断回他最后这句话时，要不要翻他的记录（饮食：他让你们算过的每一顿；睡眠：他说过的每一晚怎么睡的；"
+                      "心情：他每次聊天时的心情）。只输出要翻的，用空格隔开，比如“饮食”或“睡眠 心情”；都不用就输出“不用”。\n"
+                      "要翻：他问起以前的、问累计和变化（今天一共吃了多少、这周睡得怎么样、我最近心情是不是好点了、跟上周比）；"
+                      "他在算新的一顿，顺带说今天一共多少有用；他说的状态跟吃和睡直接有关（这几天特别困、白天没精神、胖了、想控制饮食）。\n"
+                      "不用：说的是别的事；只是顺嘴带到吃饭睡觉（吃醋、睡一觉就好了、累死了）；他正难受、想被安慰，没问以前怎样。\n"
+                      "他最后这句要是接着前面问（那上个月呢、跟上周比呢）：翻前面问的那一样，日期按最后这句说的"
+                      "（前面问这周、最后问“那上个月呢”，就翻上个月）。\n"
+                      "今天是 %s（星期%s）；这周 %s，上周 %s，这个月 %s，上个月 %s。要翻的每一样后面写上翻哪几天：他说了哪段"
+                      "就写哪段（这周、上个月、十月、去年、11月3号那天），没说就写最近两周 %s。比如“饮食 2026-10-01~2026-10-31”。\n"
+                      "这次能翻的只有：%s。")
+# "多少卡", "450 到 550 卡" too (review 2026-11-26: a reply in 卡 alone, so a photo asked about was never recorded)
+DIET_CALC = re.compile(r"热量|卡路里|大卡|千卡|kcal|营养|蛋白质|碳水|脂肪|多少卡|\d\s*卡(?![片通车住])", re.I)
+# what he ate said without 吃/喝 (review 2026-11-25: "我早上两个鸡蛋，中午一碗面" was never looked at): a time of day with
+# an amount, or a common food. A miss loses the record; a false hit costs one background call that writes nothing.
+DIET_SAID = re.compile(r"吃了|喝了|吃的|喝的|早饭|午饭|晚饭|夜宵|宵夜|早餐|午餐|晚餐|外卖|零食|一顿|加餐|吃撑|吃多了|没吃|"
+                       r"(?:早上|早晨|上午|中午|下午|晚上|夜里|刚才|刚刚)[^，。！？\n]{0,6}?[一二两三四五六七八九十半几\d]+\s*"
+                       r"(?:个|碗|杯|份|盘|块|片|根|瓶|罐|袋|包|只|串|勺|碟|笼|两|克|斤)|"
+                       r"鸡蛋|米饭|面条|拌面|炒饭|包子|馒头|粥|饺子|馄饨|米线|米粉|面包|三明治|汉堡|披萨|炸鸡|沙拉|火锅|烧烤|麻辣烫|"
+                       r"便当|盒饭|水果|牛奶|酸奶|豆浆|油条|奶茶|咖啡|可乐|啤酒|白酒|红酒|蛋糕|甜品|饼干|薯片")
+# a correction of the meal he has just told, naming neither the meal nor the food (review 2026-11-26: "其实只有半碗" was
+# never looked at): an amount, or a word that corrects. Only counted right after a meal (App.after_meal).
+DIET_FIX = re.compile(r"[一二两三四五六七八九十半几\d]+\s*(?:个|碗|杯|份|盘|块|片|根|瓶|罐|袋|包|只|串|勺|碟|笼|两|克|斤|口)|"
+                      r"一半|没吃完|剩了|剩下|少了|多了|算错|记错|说错|改成|应该是|还加了|忘了说|没那么多")
+SLEEP_TALK = re.compile(r"睡|失眠|醒了|醒来|才醒|就醒|熬夜|通宵|作息|午觉|午休|打盹|噩梦|做梦|梦见|安眠|褪黑素|躺下|躺到|上床|"
+                        r"起床|爬起来|赖床|闹钟")
+MOOD_TALK = re.compile(r"没精神|不开心|心累|无力|撑不住|开心|高兴|快乐|幸福|满足|轻松|爽|激动|难过|伤心|委屈|烦|焦虑|紧张|害怕|担心|生气|气死|郁闷|压抑|崩溃|想哭|哭|"
+                       r"累|疲|空落|丧|emo|低落|失落|孤独|寂寞|心情|情绪|难受|堵|慌|无聊|迷茫|绝望|后悔|自责|内疚|没劲|提不起", re.I)
+RECORD_ASK = {
+    "diet": ('"diet"：他说了自己吃了、喝了什么（哪一顿、吃了什么、多少），或者这一轮算了他自己吃的、喝的东西的热量或营养，就记；'
+             "回复里算了数就照回复的数，没算的写 null，不自己估。一顿一个对象，放在一个列表里（他一句话说了早饭和午饭，就是两个）：\n"
+             '[{"meal": "早饭|午饭|晚饭|加餐|夜宵|不确定", "day": 0, "items": [{"name": "拌面", "amount": "1碗，约二两", '
+             '"kcal": [350, 400]}], "kcal": [1000, 1210], "protein_g": null, "fat_g": null, "carb_g": null, "note": ""}]\n'
+             "items 一样一项；kcal 给了范围写范围，一个数就两头写一样，没算的写 null；外面的 kcal 是这一顿的总数，照回复里的总数，"
+             "哪样没算进去在 note 里说一句。day：今天 0，昨天 -1。meal：他说了哪顿（或者早上、中午、晚上）写哪顿，没说写“不确定”，"
+             "不按现在几点猜。"
+             "protein_g、fat_g、carb_g：回复给了这一顿的克数才填（范围取中间）。他发来吃的、喝的照片问热量或营养，"
+             "就记下这一顿（客户：拍了吃的、算了热量的都要存）；一桌好几样、看着不止一个人的量也记，note 写一句"
+             "“看着是几个人的量”。他说了是别人吃的、只问一般知识（一碗米饭多少卡）、只问以前记过的（今天一共多少、"
+             "中午那顿多少热量来着、这周吃得怎么样），写 null：回复只是把记过的再说一遍，不是更正，也不加 same。"),
+    "sleep": ('"sleep"：他说了自己某一晚（或某次午睡）具体睡得怎么样才记：\n'
+              '{"night": -1, "nap": false, "bed": "23:30", "wake": "07:10", "hours": 7.5, "quality": "好|还行|差|失眠", '
+              '"wakeups": null, "note": ""}\n'
+              "night：昨晚 -1，今晚、刚才、凌晨还没睡 0，前晚 -2；今天午睡写 0 并且 nap 为 true。没说的写 null，不猜；"
+              "hours 他说了时长、或者几点睡几点醒都说了才写。笼统的（最近总睡不好）、别人的、只是说想睡了要去睡了，写 null。"),
+    "mood": ('"mood"：他说了或者明显流露出自己这会儿（或今天）的心情才记：\n'
+             '{"mood": "一个词，比如 开心 轻松 平静 一般 累 烦 焦虑 紧张 低落 难过 委屈 生气 孤独 迷茫 崩溃", '
+             '"score": 3, "about": "因为什么，十个字以内", "note": ""}\n'
+             "score：1 很糟，2 不好，3 一般，4 不错，5 很好。about 他没说写 null。只是在问事、办事，看不出心情，写 null。"),
+}
+RECORD_DIET_SAME = ("\n他今天、昨天记下的几顿和刚说过的（编号. 哪天 哪顿（几点说的）吃了什么）：\n%s\n这一轮要是还在说上面其中一顿（补算、改份量、"
+                    "加了一样），diet 里这一顿写完整的新记录（它原来有的加上他这次改的、补的；上面另外列着的别的几顿里的东西不要并进来，"
+                    "回复放在一起说了也不并），day 写那一顿是哪天，并加上 \"same\": 那一顿的编号（他说了是午饭，就是午饭那一顿；"
+                    "说了是哪天，就是那天的）；说的是另一顿（又吃了一顿也是另一顿）就不加。")
+# always asked with diet: a correction of a meal not on that list (an older day) is flagged too, and found by its day
+RECORD_DIET_FIX = ("\n他要是在更正以前记过的一顿（上面没列的也算，比如“前天午饭其实只有半碗”），diet 里写这一顿完整的新记录，"
+                   "day 写那一顿是哪天，加上 \"same\": true。")
+
+
+def day_word(d, today):
+    try:
+        k = (today - datetime.date.fromisoformat(d)).days
+    except (TypeError, ValueError):
+        return ""
+    return {0: "今天", 1: "昨天", 2: "前天"}.get(k, d[5:])
+
+
+def recent_meal_line(i, m, today):
+    """One of the meals offered to RECORD_DIET_SAME (today = the day he sent the turn); one he deleted shows only which
+    meal it was."""
+    day = day_word(m.get("d"), today)
+    if m.get("gone"):
+        return "%d. %s %s（%s 说的；这一顿他已经删掉了）" % (i, day, m.get("meal") or "一顿", str(m.get("t", ""))[11:16])
+    return "%d. %s %s" % (i, day, meal_line(m))
+
+
+def _dishes(r):
+    return [n for n in (str(i.get("name") or "").strip() for i in r.get("items") or [] if isinstance(i, dict)) if n]
+
+
+def same_meal(got, rec, recent, used, more=()):
+    """-> (which earlier meal this extracted one updates, or None; whether it is a correction). recent = the meals the
+    model was shown (record_recent, numbered from 1); more = the meals of the day he named when that is before
+    yesterday (App.day_meals). A correction that fits none is kept out of the day's sums (note_records), so no meal
+    counts twice; not a correction ("false", 0, null), or no meal on that day that could be it = a meal of its own.
+    Among the meals of the day he named (any day when he named none), of the meal he named (or any, with none named):
+    the one of that meal; else the one sharing a dish (拌面 / 葱油拌面); else the model's number, or for true the one
+    left (of that day, when there are several; never a guess). A meal he didn't say the meal of, with no dish in common,
+    isn't taken for the one he named. Each one is updated once a turn. (Reviews 2026-11-26: "午饭其实只有半碗" went onto 早饭, then onto a 牛奶
+    said later; "刚才说的拌面其实只吃了半碗" onto the 牛奶; "昨天午饭只有半碗" onto today's; one told more than 3 hours
+    before came in as a second meal.)"""
+    s = got.get("same")
+    if str(s).strip().lower() == "true":  # True too
+        n = 0
+    elif isinstance(s, (int, str)) and not isinstance(s, bool) and str(s).strip().isdigit() and int(s) > 0:
+        n = int(s)
+    else:
+        return None, False
+    meal, ids = rec.get("meal"), {m["id"] for m in recent}
+    pool = list(recent) + [m for m in more if m["id"] not in ids]
+    # he said which day: that day's only. 0 is also what the model writes when he said none, so today counts as said
+    # only with 今天 in his words (review 2026-11-26: "说的是今天午饭" went onto yesterday's, the only one there was)
+    if _day(got.get("day")) or TODAY_SAID.search(rec.get("said") or ""):
+        pool = [m for m in pool if m.get("d") == rec.get("d")]
+    pool = [m for m in pool if not meal or m.get("meal") in (None, meal)]
+    if not pool:
+        return None, False  # nothing it could be: another meal (晚饭 after 早饭 and 午饭), or a day with none
+    free = [m for m in pool if m["id"] not in used]
+    mine = _dishes(rec)
+    shares = lambda m: any(a in b or b in a for a in _dishes(m) for b in mine)
+    named = [m for m in free if meal and m.get("meal") == meal]
+    dish = [m for m in named or free if shares(m)]
+    for one in (named, dish):
+        if len(one) == 1:
+            return one[0], True
+    choose = dish or named or free
+    if n:
+        pointed = recent[n - 1] if n <= len(recent) else None
+        pick = pointed if any(pointed is m for m in choose) else None
+    else:
+        today = [m for m in choose if m.get("d") == rec.get("d")]  # true alone: only when that leaves one, never a guess
+        pick = today[0] if len(today) == 1 else choose[0] if len(choose) == 1 else None
+    if pick and meal and pick.get("meal") != meal and not shares(pick):
+        pick = None  # a meal he didn't say the meal of, with nothing in common with this one
+    return pick, True
+
+
+RECORD_TURN = ("下面是一个人刚才的一轮对话：他发来的（图片里的内容和他打的字）和“另一个自己”的回复。把他在这一轮里给出的、"
+               "关于他自己的下面几样信息提炼出来。只输出一个 JSON 对象，最外层的键就是 %s，每个键的值是下面那样的对象，哪样没有就写 null：\n")
+MEALS = ("早饭", "午饭", "晚饭", "加餐", "夜宵")
+# The page's own replies whose words still go into his records (review 2026-11-25: 导师's fixed answer to
+# "我只想说说，今天真的很难过" never reached /api/chat, so that day's mood went unrecorded). Not crisis: that line is a
+# safety script, not talk to keep a mood from.
+LOCAL_RECORDED = ("fixed", "llm-failed", "offline")
+
+
+def records_needed(users, have, ask):
+    """Which of his records (kinds in `have`) this reply should be able to look at (see RECORD_NEED_PROMPT), and for
+    which days: {kind: (since, until) | None (the last RECORD_DAYS days)}. A short follow-up ("那上个月呢") is
+    judged with the line before it (review 2026-11-25: it had no word about sleep, so the lookup was skipped)."""
+    last = users[-1] if users else ""
+    if not last or last.startswith(IMAGE_MARK):
+        return {}
+    prev = users[-2] if len(users) > 1 and len(last) <= 12 else ""
+    hit = [k for k in have if k in RECORD_HINT and (RECORD_HINT[k].search(last) or RECORD_HINT[k].search(prev))]
+    if not hit:
+        return {}
+    today = datetime.date.today()
+    said = "\n".join("他：" + u for u in users[-3:])
+    # the spans worked out here: left to the model, "那上个月呢" came back as this month one time in three
+    span = lambda a, b: "%s~%s" % (a.isoformat(), b.isoformat())
+    monday, first = today - datetime.timedelta(days=today.weekday()), today.replace(day=1)
+    last_end = first - datetime.timedelta(days=1)
+    prompt = RECORD_NEED_PROMPT % (today.isoformat(), "一二三四五六日"[today.weekday()], span(monday, today),
+                                   span(monday - datetime.timedelta(days=7), monday - datetime.timedelta(days=1)),
+                                   span(first, today), span(last_end.replace(day=1), last_end),
+                                   span(today - datetime.timedelta(days=RECORD_DAYS - 1), today),
+                                   "、".join(RECORD_NAMES[k] for k in hit))
+    try:  # a range for every kind, even when he named none: asked for one only for a stretch, it often left it out
+        got = ask([{"role": "system", "content": prompt}, {"role": "user", "content": said}], 60) or ""
+    except LLMError:
+        return {}
+    out = {}
+    for k in hit:
+        m = re.search(RECORD_NAMES[k] + r"(?:\s*(\d{4}-\d{1,2}-\d{1,2})(?:\s*(?:~|～|到|至)\s*(\d{4}-\d{1,2}-\d{1,2}))?)?", got)
+        if m:  # "饮食 2026-10-01~2026-10-31", or one day "饮食 2026-11-03"
+            try:
+                out[k] = tuple(sorted(datetime.date(*map(int, x.split("-"))) for x in (m.group(1), m.group(2) or m.group(1)))) \
+                    if m.group(1) else None
+            except ValueError:
+                out[k] = None
+    return out
+
+
+def record_kinds_said(turn, reply, routed, after_meal=lambda: False):
+    """Which records this turn may hold (cheap patterns; the model call in App.note_records decides). after_meal() ->
+    whether he has just told a meal (App.after_meal): then an amount or a correction alone counts too (DIET_FIX)."""
+    words = " ".join(t for t in turn if not t.startswith(IMAGE_MARK))
+    diet = DIET_CALC.search(reply) or DIET_CALC.search(" ".join(turn)) or DIET_SAID.search(words) or \
+        (DIET_FIX.search(words) and after_meal())
+    return [k for k, hit in (("diet", diet), ("sleep", SLEEP_TALK.search(words)), ("mood", routed or MOOD_TALK.search(words)))
+            if hit]
+
+
+def record_entry(kind, got, pid, tid, turn, now):
+    """The model's JSON for one kind (one meal) -> a record (memory.Memory.record_put), or None when there is nothing to
+    keep. now = when he sent the turn."""
+    if not isinstance(got, dict):
+        return None
+    words = [t for t in turn if not t.startswith(IMAGE_MARK)]
+    base = {"t": now.isoformat(timespec="seconds"), "p": pid, "tid": tid, "said": clip(" ".join(words), 120) or None,
+            "note": clip(got.get("note"), 60) or None}
+    if kind == "diet":
+        items = [{"name": clip(it["name"], 20), "amount": clip(it.get("amount"), 30) or None, "kcal": parse_kcal(it.get("kcal"))}
+                 for it in got.get("items") or [] if isinstance(it, dict) and str(it.get("name") or "").strip()]
+        if not items:
+            return None
+        lost, day = sum(t.startswith(IMAGE_LOST) for t in turn), _day(got.get("day"))
+        if day is None:
+            return None
+        # meal: what he said, or None. Not the hour: a meal told in the evening was being kept as 晚饭 (review 2026-11-25)
+        rec = dict(base, d=(now.date() + datetime.timedelta(days=day)).isoformat(),
+                   meal=got.get("meal") if got.get("meal") in MEALS else None, items=items, kcal=parse_kcal(got.get("kcal")),
+                   pics=sum(t.startswith(IMAGE_MARK) for t in turn) - lost, lost=lost or None)
+        for k in ("protein_g", "fat_g", "carb_g"):
+            v = parse_kcal(got.get(k))
+            if v:
+                rec[k] = round(sum(v) / 2)
+        return rec
+    if kind == "sleep":
+        clock = lambda x: x.strip() if isinstance(x, str) and re.fullmatch(r"\s*[0-2]?\d:[0-5]\d\s*", x) else None
+        hours = got.get("hours") if isinstance(got.get("hours"), (int, float)) and 0 < got["hours"] <= 24 else None
+        if got.get("nap"):  # a nap goes into that day's record
+            return dict(base, d=now.date().isoformat(), nap="午睡约 %g 小时" % hours if hours else "睡了午觉")
+        quality = got.get("quality") if got.get("quality") in ("好", "还行", "差", "失眠") else None
+        bed, wake = clock(got.get("bed")), clock(got.get("wake"))
+        wakeups = got["wakeups"] if isinstance(got.get("wakeups"), int) and 0 <= got["wakeups"] < 30 else None
+        if not (bed or wake or hours or quality or wakeups is not None or base["note"]):  # "半夜还醒了两次" alone counts
+            return None
+        # "昨晚" is -1 whenever he says it; only "今晚、刚才、还没睡" (0) said before 5 am is the night that began yesterday
+        # (review 2026-11-25: at 2 am "昨晚 23 点睡" was moved back twice, to the 23rd)
+        n = _day(got.get("night"))
+        if n is None:
+            return None
+        night = now.date() + datetime.timedelta(days=n - (1 if n == 0 and now.hour < 5 else 0))
+        return dict(base, d=night.isoformat(), bed=bed, wake=wake, hours=hours, quality=quality, wakeups=wakeups)
+    mood = clip(got.get("mood"), 6)
+    if not mood:
+        return None
+    score = got.get("score") if isinstance(got.get("score"), int) and 1 <= got["score"] <= 5 else None
+    return dict(base, d=now.date().isoformat(), mood=mood, score=score, about=clip(got.get("about"), 16) or None)
+
+
+RECORD_BACK = 366  # how many days back a meal or a night can be told, or corrected
+TODAY_SAID = re.compile(r"今(?:天|早|晚|儿|日)")
+
+
+def _day(x):
+    """The model's day or night (0 today, -1 yesterday; none given = today) -> the offset, or None when it isn't one of
+    the last RECORD_BACK days: then nothing is written, rather than onto another day (review 2026-11-26: a correction
+    with day -9 was cut to -7 and went onto that day's meal)."""
+    if x is None or x == "":
+        return 0
+    try:
+        k = int(x)
+    except (TypeError, ValueError):
+        return None
+    return k if -RECORD_BACK <= k <= 0 else None
 
 
 STEP_INLINE = re.compile(r"(?<=[。！？；：:])[ \t]*(?=[1-9][.．、](?!\d)|[一二三四五六七八九][，、](?![一二三四五六七八九]))")
@@ -1001,15 +1304,17 @@ def practical_tidy(reply):
 
 
 def practical_ask(users, ask):
-    """True when his last line lays out a practical matter and asks what to do (see PRACTICAL_PROMPT)."""
+    """"办事" when his last line asks for something worked out or made for him, "实事" when it lays out a practical matter
+    and asks what to do, else None (see PRACTICAL_PROMPT). A picture sent with no words is not an ask."""
     last = users[-1].strip() if users else ""
-    if len(last) < 8 or astro_turn(users) or not PRACTICAL_HINT.search(last):
-        return False
+    if len(last) < 4 or last.startswith(IMAGE_MARK) or astro_turn(users) or not PRACTICAL_HINT.search(last):
+        return None
     said = "\n".join("他：" + u for u in users[-3:])
     try:
-        return "实事" in (ask([{"role": "system", "content": PRACTICAL_PROMPT}, {"role": "user", "content": said}]) or "")
+        got = ask([{"role": "system", "content": PRACTICAL_PROMPT}, {"role": "user", "content": said}]) or ""
     except LLMError:
-        return False
+        return None
+    return next((k for k in ("办事", "实事") if k in got), None)
 
 
 def views_block(pid, ids):
@@ -1049,16 +1354,18 @@ def user_block(req):
     return "【这位用户】\n称呼：%s" % (clip(req.get("nick"), 12) or "朋友")
 
 
-def plan_reply(pid, hist, ask, avoid=()):
+def plan_reply(pid, hist, ask, avoid=(), have=()):
     """What /api/chat settles before writing a reply (tools/run_eval.py and chatlog replay use it too, so they match):
-    whether this is astrology or a practical ask, which view cards, which route. ask(msgs) -> text, a short model call."""
+    whether this is astrology or a practical ask, which view cards, which route, which of his records (kinds in `have`)
+    to look at. ask(msgs) -> text, a short model call."""
     users = [clip(h.get("content"), 300) for h in hist[-6:] if h.get("role") == "user"]
     astro = astro_now(hist)
     practical = not astro and practical_ask(users, ask)
     last_ai = next((str(h.get("content") or "") for h in reversed(hist) if h.get("role") != "user"), "")
     return {"users": users, "astro": astro, "practical": practical,
             "views": [] if astro or practical else pick_views(pid, users, ask),  # the view cards are about feelings
-            "move": None if astro or practical else pick_move(pid, users, last_ai, list(avoid), ask)}
+            "move": None if astro or practical else pick_move(pid, users, last_ai, list(avoid), ask),
+            "records": {} if astro else records_needed(users, have, ask)}
 
 
 def reply_limits(pid, plan, cap):
@@ -1084,8 +1391,8 @@ def finish_reply(pid, plan, msgs, raw, cap, told=False):
 
 def build_messages(pid, req, know=None, views="", move=None, saved=None, practical=False):
     """Chat: persona + who the user is (+ what the selves know) (+ view cards for what he is talking about) + the last
-    16 turns. saved = birth details he just gave in chat that are now in req["birth"] (see said_birth); practical = he
-    asks what to do about a practical matter (see practical_ask)."""
+    16 turns. saved = birth details he just gave in chat that are now in req["birth"] (see said_birth); practical = "实事"
+    when he asks what to do about a practical matter, "办事" when he wants something worked out or made (see practical_ask)."""
     ctx = [user_block(req)]
     # The page writes the summary to him ("你习惯边说边想……"); handed over like that, the selves quoted it back as something
     # he had said ("你上回说过，你习惯边说边想"). Third person makes it a description, not his words.
@@ -1130,8 +1437,10 @@ def build_messages(pid, req, know=None, views="", move=None, saved=None, practic
     if chart and parts:
         stale, hist = stale_claims(chart, hist)
         now += stale
-    if last.startswith(IMAGE_MARK):
-        now += IMAGE_NOTE
+    # pictures come as their own turns, then his words if he typed any (several pictures and one line, one reply)
+    turn = list(itertools.takewhile(lambda h: h.get("role") == "user", reversed(hist)))
+    if any(str(h.get("content") or "").startswith(IMAGE_MARK) for h in turn):
+        now += IMAGE_NOTE + (IMAGE_LOST_NOTE if any(str(h.get("content") or "").startswith(IMAGE_LOST) for h in turn) else "")
     full = req.get("history") or []
     if full and any(same_line(full[-1].get("content"), h.get("content")) for h in full[:-1] if h.get("role") == "user"):
         now += REPEAT_NOTE
@@ -1145,7 +1454,7 @@ def build_messages(pid, req, know=None, views="", move=None, saved=None, practic
     follow = len(last_ai) >= 150 and not astro
     route = moves(pid).get(move) if move else None
     if practical:
-        now += PRACTICAL_NOTE + (PRACTICAL_FOLLOW if follow else "")
+        now += (TASK_NOTE if practical == "办事" else PRACTICAL_NOTE) + (PRACTICAL_FOLLOW[practical] if follow else "")
         follow, route = False, None
     if follow:
         now += ("这是接着聊：你上一条已经说了一大段，这一条接着他刚说的这一句往下走，上一条说过的（他的处境、那几件事、"
@@ -1172,6 +1481,8 @@ def build_messages(pid, req, know=None, views="", move=None, saved=None, practic
         content = clip(h.get("content"), HIST_CLIP[role])
         if content:
             if msgs[-1]["role"] == role:
+                if role == "user" and IMAGE_MARK in msgs[-1]["content"] and not content.startswith(IMAGE_MARK):
+                    content = WORDS_MARK + content  # what he typed under his pictures, not more of what is in them
                 msgs[-1]["content"] += "\n" + content  # merge consecutive same-role turns
             else:
                 msgs.append({"role": role, "content": content})
@@ -1345,7 +1656,8 @@ class App:
             self.catalog = json.load(f)
         self.voices = {str(v["id"]): v for v in self.catalog["voices"]}
         self.pool = ThreadPoolExecutor(max_workers=6)       # audio chunks, on the request path
-        self.fold_pool = ThreadPoolExecutor(max_workers=2)  # memory folds, in the background
+        self.fold_pool = ThreadPoolExecutor(max_workers=2)  # memory folds and records, in the background
+        self.rec_jobs, self.rec_lock = {}, threading.Lock()  # uid -> his record jobs not done yet, oldest first (queue_records)
         self.mem = Memory(os.path.join(DATA_DIR, "users"),
                           lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0])
         self.lock = threading.Lock()       # rate limits
@@ -1398,10 +1710,13 @@ class App:
 
     def chat(self, pid, req, who):
         uid = req.get("u") if valid_uid(req.get("u")) else None
+        at = datetime.datetime.now()  # when he said it: records pulled out of this turn are dated and checked against it
+        vers = {k: self.mem.record_ver(uid, k) for k in RECORD_KINDS} if uid else {}
+        gen = self.mem.gen(uid) if uid else None  # wiped while the reply is written: nothing of this turn is kept
         hist = req.get("history") or []
-        ask = lambda m: self.llm(m, max_tokens=20, temperature=0, timeout=8)[0]
+        ask = lambda m, n=20: self.llm(m, max_tokens=n, temperature=0, timeout=8)[0]
         key = (uid or who.get("ip"), pid)
-        plan = plan_reply(pid, hist, ask, self.recent_moves.get(key, []))
+        plan = plan_reply(pid, hist, ask, self.recent_moves.get(key, []), self.mem.record_kinds(uid) if uid else ())
         users, astro, practical, vids, move = (plan[k] for k in ("users", "astro", "practical", "views", "move"))
         locate = lambda city: self.geo.find(city, lambda m: self.llm(m, max_tokens=80, temperature=0, timeout=10)[0])
         birth = dict(req["birth"]) if isinstance(req.get("birth"), dict) else {}
@@ -1421,6 +1736,10 @@ class App:
         if birth:
             req = dict(req, birth=birth)
         know = self.mem.context(uid, " ".join(users[-3:]), pid, brief=astro) if uid else None
+        # his turn: the pictures he sent and the words he typed after them (several pictures and one line, one reply)
+        turn = [str(h.get("content") or "") for h in itertools.takewhile(lambda h: h.get("role") == "user", reversed(hist))][::-1]
+        if know and plan["records"]:  # his 饮食、睡眠、心情 records, when this reply needs them (records_needed)
+            know = "\n".join([know] + [self.mem.record_block(uid, k, *(span or ())) for k, span in plan["records"].items()])
         if move:
             with self.lock:
                 self.recent_moves[key] = [move] + self.recent_moves.get(key, [])[:1]
@@ -1444,11 +1763,24 @@ class App:
         reply = finish_reply(pid, plan, msgs, raw, cap, told)
         tid = self.log("chat", who, pid, req, user=msgs[-1]["content"], reply=reply, raw=raw if fit(raw, cap) != raw else None,
                        cap=cap, model=model, ms=ms, pv=prompt_version(pid), know=know, views=vids or None,
-                       move="实事" if practical else move,
+                       records={k: span and [d.isoformat() for d in span] for k, span in plan["records"].items()} or None,
+                       move=practical or move,
                        hist=req.get("history"), profile=clip(req.get("profile"), 800) or None,
                        birth=req.get("birth") if isinstance(req.get("birth"), dict) else None, saved=saved or None)
-        if uid and self.mem.append(uid, pid, [("user", clip(msgs[-1]["content"], 1000)), ("ai", reply)]) >= 8:
-            self.fold_pool.submit(self.fold, uid, 8)
+        # one line per picture and one for his words: in a single 1000-字 line, long pictures pushed his words out
+        lines = [("user", clip(t, 600 if t.startswith(IMAGE_MARK) else 1000)) for t in turn if not t.startswith(IMAGE_LOST)] or \
+                [("user", clip(msgs[-1]["content"], 1000))]
+        try:
+            if uid and self.mem.append(uid, pid, lines + [("ai", reply)], gen) >= 8:
+                self.fold_pool.submit(self.fold, uid, 8)
+        except OSError as e:  # his profile is there but can't be read: the reply still goes back, nothing is written over it
+            sys.stderr.write("append %s: %s\n" % (uid[:6], e))
+        # his turn before this one (past the reply to it): a meal told there makes "其实只有半碗" a correction of it
+        rest = itertools.dropwhile(lambda h: h.get("role") != "user", reversed(hist[:len(hist) - len(turn)]))
+        before = [str(h.get("content") or "") for h in itertools.takewhile(lambda h: h.get("role") == "user", rest)]
+        kinds = record_kinds_said(turn, reply, bool(move), lambda: self.after_meal(uid, before, at, vers["diet"])) if uid else []
+        if kinds:  # 饮食、睡眠、心情 he gave in this turn -> his records, in the background
+            self.queue_records(uid, functools.partial(self.note_records, uid, pid, kinds, turn, reply, tid, who, at, vers))
         out = {"reply": reply, "model": model, "ms": ms, "tid": tid}
         if saved:  # the page keeps it in his profile, so the next visit (and the other self) has it too
             out["birth"] = saved
@@ -1472,7 +1804,12 @@ class App:
         t0, text, err = time.time(), "", "no model"
         for (endpoint, model), wait in zip(SEE_MODELS, (30, 45)):  # deepseek reads one in ~4 s; page waits 85 s, nginx 90
             try:
-                text = strip_md(llm_call(endpoint, model, msgs, max_tokens=1600, temperature=0, timeout=wait, think=False))
+                # 0.3, not 0: at 0 a meal photo sometimes came back as "一个白色小碗，里面是面条" seventy times; the 紫微
+                # screenshot still copies out right at 0.3 (12 palaces, 3 runs of 3)
+                text = strip_md(llm_call(endpoint, model, msgs, max_tokens=1600, temperature=0.3, timeout=wait, think=False))
+                if looping(text):
+                    again = strip_md(llm_call(endpoint, model, msgs, max_tokens=1600, temperature=0.6, timeout=wait, think=False))
+                    text = again if again and not looping(again) else unloop(text)
             except LLMError as e:
                 err = str(e)
             if text:
@@ -1493,12 +1830,16 @@ class App:
     def closing(self, pid, req, who):
         """One sentence that sums up the session, said when the user taps 结束本次对话."""
         msgs, said = build_closing(pid, req)
+        gen = self.mem.gen(req["u"]) if valid_uid(req.get("u")) else None
         text, model, ms = self.llm(msgs, max_tokens=120, temperature=0.7, tidy=tidy_closing)
         text = postprocess("", text, pid=pid)  # the closing line never carries the hotline
         tid = self.log("closing", who, pid, req, user=said, reply=text, model=model, ms=ms, pv=prompt_version(pid))
         if valid_uid(req.get("u")):
-            self.mem.append(req["u"], pid, [("closing", text)])
-            self.fold_pool.submit(self.fold, req["u"], 2)
+            try:
+                self.mem.append(req["u"], pid, [("closing", text)], gen)
+                self.fold_pool.submit(self.fold, req["u"], 2)
+            except OSError as e:  # as in chat: the line still goes back
+                sys.stderr.write("append %s: %s\n" % (req["u"][:6], e))
         return {"text": text, "model": model, "ms": ms, "tid": tid}
 
     def opening(self, pid, req, who):
@@ -1554,6 +1895,108 @@ class App:
         except Exception as e:  # background work must never take the server down
             sys.stderr.write("consolidate %s failed: %s\n" % (uid[:6], e))
             return None
+
+    def note_said(self, uid, pid, said, reply, tid, who):
+        """His words the page answered itself (/api/event local): into his records the same way as a chat turn."""
+        at, vers = datetime.datetime.now(), {k: self.mem.record_ver(uid, k) for k in RECORD_KINDS}
+        kinds = record_kinds_said([said], reply, False, lambda: self.after_meal(uid, (), at, vers["diet"]))
+        if kinds:
+            self.queue_records(uid, functools.partial(self.note_records, uid, pid, kinds, [said], reply, tid, who, at, vers))
+
+    def day_meals(self, uid, got, rec, at, ver):
+        """For same_meal: all his meals of the day this correction is about (the day he said, or today), told before
+        `at`: the model is shown 8 at most (review 2026-11-26: yesterday's 午饭 was the 9th back and came in again)."""
+        if not got.get("same"):
+            return []
+        upto = at.isoformat(timespec="seconds")
+        try:
+            return self.mem.record_said(uid, "diet", ver, lambda r: r.get("d") == rec["d"] and str(r.get("t") or "") <= upto)
+        except OSError:
+            return []
+
+    def after_meal(self, uid, before, at, ver):
+        """Has he just told a meal: in his lines before this turn (its record may still be on the way), or one kept in
+        the last 3 hours (to either self). For record_kinds_said: "其实只有半碗" alone is about that meal."""
+        if any(DIET_SAID.search(t) or DIET_CALC.search(t) for t in before):
+            return True
+        try:
+            return bool(self.mem.record_recent(uid, "diet", 3, at, ver))
+        except OSError:
+            return False
+
+    def queue_records(self, uid, job):
+        """His record jobs run one at a time, in the order he sent the turns (review 2026-11-25: two at once each found
+        no mood for the day and both added one; and the later turn's state must be the day's last)."""
+        with self.rec_lock:
+            jobs = self.rec_jobs.setdefault(uid, deque())
+            jobs.append(job)
+            if len(jobs) > 1:
+                return  # the one running drains it
+        self.fold_pool.submit(self._run_records, uid)
+
+    def _run_records(self, uid):
+        while True:
+            with self.rec_lock:
+                job = self.rec_jobs[uid][0]
+            job()  # never raises (note_records catches everything)
+            with self.rec_lock:
+                jobs = self.rec_jobs[uid]
+                jobs.popleft()
+                if not jobs:
+                    del self.rec_jobs[uid]
+                    return
+
+    def note_records(self, uid, pid, kinds, turn, reply, tid, who, at, vers):
+        """Background, after a reply: the 饮食、睡眠、心情 he gave in this turn -> his records, in one model call
+        (RECORD_ASK). A follow-up about the same meal updates it; sleep and mood keep one record a day. at = when he sent
+        the turn; vers = memory.record_ver then: nothing is written into a kind he cleared or deleted from since, and a
+        kind he cleared (or everything, wiped) isn't even asked about: what he said goes to no model after that."""
+        try:
+            kinds = [k for k in kinds if self.mem.record_fresh(uid, k, vers[k])]
+            if not kinds:
+                return
+            try:
+                recent = self.mem.record_recent(uid, "diet", 3, at, vers["diet"], n=8, days=2) if "diet" in kinds else []
+            except OSError:
+                recent = []  # diet.json can't be read: the meal won't be written (record_put), the other kinds still are
+            ask = RECORD_TURN % "、".join('"%s"' % k for k in kinds) + "\n".join(RECORD_ASK[k] for k in kinds)
+            if recent:
+                ask += RECORD_DIET_SAME % "\n".join(recent_meal_line(i + 1, m, at.date()) for i, m in enumerate(recent))
+            if "diet" in kinds:
+                ask += RECORD_DIET_FIX
+            used = set()
+            said = "\n".join(clip(t, 800) for t in turn)
+            text = self.llm([{"role": "system", "content": ask},
+                             {"role": "user", "content": "他发来的：\n%s\n\n回复：\n%s" % (said, reply)}],
+                            max_tokens=900, temperature=0, timeout=30)[0]
+            got = parse_json(text) or {}
+            if len(kinds) == 1 and got and not set(got) & set(RECORD_KINDS):  # asked for one, it left out {"sleep": ...}
+                got = {kinds[0]: got}
+            for kind in kinds:
+                found = got.get(kind)
+                for one in (found if isinstance(found, list) else [found]):  # diet: a list, one meal each
+                    rec = record_entry(kind, one, pid, tid, turn, at)
+                    if not rec:  # kept in the archive too, to see what the extraction misses
+                        self.log("record", who, pid, {"u": uid}, record=kind, kept=False, ref=tid,
+                                 raw=clip(json.dumps(one, ensure_ascii=False) if kind in got else text, 300))
+                        continue
+                    pick, fix = same_meal(one, rec, recent, used, self.day_meals(uid, one, rec, at, vers["diet"])) \
+                        if kind == "diet" else (None, False)
+                    same = pick and pick["id"]
+                    if same:
+                        used.add(same)
+                    elif fix:  # he is correcting a meal, but which one can't be told: kept, out of the sums, the rest as it was
+                        rec["unmatched"] = True
+                    try:
+                        put = self.mem.record_put(uid, kind, rec, vers[kind], same)
+                        why = (None if not fix or same else "unmatched") if put else "cleared"  # or deleted: kind, meal, day
+                    except OSError as e:  # the file is there but can't be read: left as it is
+                        put, why = None, "unreadable"
+                        sys.stderr.write("record_put %s %s: %s\n" % (uid[:6], kind, e))
+                    self.log("record", who, pid, {"u": uid}, record=kind, kept=bool(put), ref=tid, same=bool(same) or None,
+                             reply=json.dumps(put or rec, ensure_ascii=False), why=why)
+        except Exception as e:  # background work must never take the server down
+            sys.stderr.write("records %s failed: %s\n" % (uid[:6], e))
 
     # -- the archive: everything said, one jsonl per day (read with tools/chatlog.py)
     def log(self, kind, who, pid, req, **fields):
@@ -1674,9 +2117,23 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/self":
             if not valid_uid(q.get("u")):
                 return self.send_json(400, {"error": "bad user id"})
-            if not self.limited("fb"):
-                self.send_json(200, APP.mem.summary(q["u"]))
-            return None
+            if self.limited("fb"):
+                return None
+            try:  # one that can't be read is an error, not "nothing known yet": the page keeps what it showed
+                return self.send_json(200, APP.mem.summary(q["u"], strict=True))
+            except OSError as e:
+                sys.stderr.write("summary %s: %s\n" % (q["u"][:6], e))
+                return self.send_json(500, {"error": "could not read"})
+        if path == "/api/records":  # his 饮食、睡眠、心情 records (the page's 我的记录)
+            if not valid_uid(q.get("u")) or q.get("kind") not in RECORD_KINDS:
+                return self.send_json(400, {"error": "bad request"})
+            if self.limited("fb"):
+                return None
+            try:  # the page says 暂时取不到, not 还没有记录
+                return self.send_json(200, {"kind": q["kind"], "items": APP.mem.records(q["u"], q["kind"])})
+            except OSError as e:
+                sys.stderr.write("records %s: %s\n" % (q["u"][:6], e))
+                return self.send_json(500, {"error": "could not read"})
         if path == "/api/persona":
             pid = q.get("p", "")
             if pid not in PERSONAS:
@@ -1690,6 +2147,7 @@ class Handler(BaseHTTPRequestHandler):
         handler = {"/api/chat": self.handle_llm, "/api/closing": self.handle_llm, "/api/open": self.handle_llm,
                    "/api/sync": self.handle_self, "/api/card": self.handle_self, "/api/self/forget": self.handle_self,
                    "/api/self/wipe": self.handle_self, "/api/self/import": self.handle_self,
+                   "/api/records/delete": self.handle_self, "/api/records/clear": self.handle_self,
                    "/api/fb": self.handle_fb, "/api/event": self.handle_fb, "/api/asr": self.handle_asr,
                    "/api/tts": self.handle_tts, "/api/portrait": self.handle_portrait,
                    "/api/chart": self.handle_chart, "/api/image": self.handle_image}.get(path)
@@ -1780,6 +2238,13 @@ class Handler(BaseHTTPRequestHandler):
         # scripted reply). It only spends a model call when there are new lines, and those already passed /api/chat.
         if self.limited("fb"):
             return None
+        try:
+            return self.self_op(path, uid, req)
+        except OSError as e:  # a file of his can't be read or written (memory.Unreadable): left as it is, and said so
+            sys.stderr.write("%s %s: %s\n" % (path, uid[:6], e))
+            return self.send_json(500, {"error": "storage"})
+
+    def self_op(self, path, uid, req):
         if path == "/api/sync":
             r = APP.fold(uid, 2) or {"add": [], "episode": ""}
             return self.send_json(200, {"memories": r["add"], "episode": r["episode"]})
@@ -1794,8 +2259,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/self/forget":
             return self.send_json(200, {"ok": APP.mem.forget(uid, str(req.get("id", "")))})
         if path == "/api/self/wipe":
-            APP.mem.wipe(uid)
+            left = APP.mem.wipe(uid)
+            if left:  # the page says what is still there, and that he can try again
+                return self.send_json(500, {"error": "could not delete everything", "left": left})
             return self.send_json(200, {"ok": True})
+        if path.startswith("/api/records/"):  # 我的记录: delete one, or clear a kind
+            kind = req.get("kind")
+            if kind not in RECORD_KINDS:
+                return self.send_json(400, {"error": "unknown record kind"})
+            if path == "/api/records/clear":
+                if not APP.mem.record_clear(uid, kind):
+                    return self.send_json(500, {"error": "could not clear"})
+                return self.send_json(200, {"ok": True})
+            return self.send_json(200, {"ok": APP.mem.record_delete(uid, kind, str(req.get("id", "")))})  # OSError: 500
         notes = req.get("notes") if isinstance(req.get("notes"), list) else []
         return self.send_json(200, {"imported": APP.mem.import_notes(uid, notes)})
 
@@ -1824,7 +2300,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": "bad request"})
         if self.limited("fb"):
             return None
-        APP.log(kind, self.who(), pid, req, **fields)
+        tid = APP.log(kind, self.who(), pid, req, **fields)
+        if kind == "local" and fields["why"] in LOCAL_RECORDED and valid_uid(req.get("u")) and fields["user"]:
+            APP.note_said(req["u"], pid, fields["user"], fields["reply"] or "", tid, self.who())
         return self.send_json(200, {"ok": True})
 
     def handle_tts(self, path):

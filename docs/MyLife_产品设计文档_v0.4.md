@@ -1,7 +1,7 @@
 # MyLife 产品设计文档 v0.4
 
 > 状态：初稿，供内部讨论 · 日期：2026-11-21
-> 配套原型：`prototype/mylife-prototype.html`（单文件，手机浏览器直接打开）
+> 配套原型：`prototype/mylife-prototype.html`（入口页面，同目录的 prototype.css、scene.js、voice.js 一起用，手机浏览器直接打开）
 >
 > **v0.4 新增**：第零阶段（内测网页版）就要有语音朗读。每个人格可单独选男声或女声，语速各自可调、默认每秒 5.6 个字；TTS 同时接入腾讯云和阿里云，后台切换。不做语音输入。详见 5.6。
 >

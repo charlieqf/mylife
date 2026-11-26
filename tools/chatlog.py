@@ -159,7 +159,7 @@ def replay(args):
         sys.exit("no replayable chat records (need the new format with hist; run `pull` first)")
 
     def one(r):
-        plan = srv.plan_reply(r["p"], r["hist"], lambda m: srv.complete(m, 20, 0, 8)[0])  # as /api/chat
+        plan = srv.plan_reply(r["p"], r["hist"], lambda m, n=20: srv.complete(m, n, 0, 8)[0])  # as /api/chat
         req = {"nick": r.get("nick") or "朋友", "history": r["hist"], "profile": r.get("profile"), "birth": r.get("birth")}
         msgs = srv.build_messages(r["p"], req, r.get("know"), srv.views_block(r["p"], plan["views"]), plan["move"],
                                   r.get("saved"), plan["practical"])
