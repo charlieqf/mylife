@@ -1015,10 +1015,13 @@ function chatContext(){
 }
 // 没看成的图也带上（服务器 IMAGE_LOST，审核 2026-11-25）：不带的话，“这些一共多少卡”会拿剩下几张当整顿饭算
 var PIC_LOST='（这张图没看成，不知道上面是什么）';
+// 以前伙伴每 10 句自动补的一句（2026-11-27 删了）：老记录里还有，不再给模型看，免得它学着说
+var OLD_NUDGE='说了这么多，我想提一句：这些话，也可以挑一两句跟身边信得过的人说说。我在这儿挺好，但别只在这儿。';
 function chatHistory(list,n,clip){
   var seen={};  // 同一张卡只算一次（菜单里重看不算又抽了一张）
   return list.filter(function(m){
     if(m.img&&!m.seen&&!m.fail&&PIC_WAIT[m.id])return false;  // 还在看的图
+    if(m.role==='ai'&&m.text===OLD_NUDGE)return false;
     if(m.role!=='rainbow')return m.role==='user'||m.role==='ai';
     if(!m.opened||!cardById(m.card)||seen[m.card])return false;
     return seen[m.card]=true;
@@ -1066,7 +1069,6 @@ async function handle(t){
     if(fixed||!CHAT.ok||!(await replyLLM(w))){why=why||'llm-failed';if(!fixed&&crisisSaid(t)){why='crisis';await say(SAFE_SOFT,{wait:600})}else await (pid==='bange'?replyBange(t):replyPingzuo(t))}
     if(w!==WIPED)return;  // 这一轮里他清空了：页面自己说的话不留，也不再发给服务器记
     if(why)logLocal(pid,why,t,from);
-    if(pid==='pingzuo'&&S.userCount.pingzuo>0&&S.userCount.pingzuo%10===0){var k=S.logs[pid].length;await say('说了这么多，我想提一句：这些话，也可以挑一两句跟身边信得过的人说说。我在这儿挺好，但别只在这儿。');logLocal(pid,'nudge','',k)}
   }finally{S.busy=false;setSend();S.shownAt=Date.now();setTimeout(askVoice,GAP)}
 }
 function startHot(){
