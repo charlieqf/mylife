@@ -76,6 +76,25 @@ def F(fid, due, p="bange", state="open", text=None):
     return {"id": fid, "text": text or "你有件事（%s）" % fid, "due": due.isoformat(), "p": p, "state": state}
 
 
+def serve():
+    """srv.Handler on a free local port (srv.APP set by the caller) -> (post(path, body), get(path)), each (status, JSON)."""
+    import http.server
+    import urllib.error
+    import urllib.request
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    def call(path, body=None):
+        req = urllib.request.Request("http://127.0.0.1:%d%s" % (httpd.server_port, path),
+                                     json.dumps(body).encode() if body is not None else None, {"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"null")
+    return (lambda path, body: call(path, body)), (lambda path: call(path))
+
+
 def at(days, hour=21):
     return datetime.datetime.combine(D(days), datetime.time(hour, 0))
 
@@ -254,6 +273,64 @@ def offline():
     gate.set(); bg.join(); sy.join()
     check(len(mem.calls) == 1 and out.get("r") is None and mem.summary(UID)["due"] == {"id": "b1", "p": "bange"},
           "后台那次做完，/api/sync 才返回：剩下的没有了、不再调模型；随后取得到红点", (len(mem.calls), out))
+
+    print("== 走固定回复的报结果也进记忆：/api/event 之后 /api/sync，红点不再亮（审核 2026-11-27 第五轮 P1）")
+    mem = fresh()
+    app = app_with(mem, lambda m: fold_answer(close=["b1"]) if "整理记忆" in m[0]["content"] else "嗯。")
+    srv.APP = app
+    post, get = serve()
+    put_follows(mem, [F("b1", TODAY, "bange", text="你周五下午有个面试")])
+    said = "我只想说说，面试过了，拿到 offer 了"
+    st, _ = post("/api/event", {"u": UID, "p": "bange", "kind": "local", "why": "fixed", "user": said, "reply": "嗯，你说。"})
+    check(st == 200 and mem._load(UID)["msgs"] == 1 and get("/api/self?u=" + UID)[1]["due"] is None,
+          "固定回复的那句进了记忆（待整理 1 句）：红点先不亮", (st, mem._load(UID)["msgs"]))
+    st, r = post("/api/sync", {"u": UID})
+    check(st == 200 and not r.get("busy") and follows(mem)[0]["state"] == "closed" and get("/api/self?u=" + UID)[1]["due"] is None,
+          "/api/sync 整理了这句、给了 close：不再问", (st, r, follows(mem)))
+    mem.append(UID, "bange", [("user", "今天又加班"), ("ai", "嗯。")])
+    post("/api/event", {"u": UID, "p": "bange", "kind": "local", "why": "llm-failed", "user": "今天又加班", "reply": "辛苦了。"})
+    check(mem._load(UID)["msgs"] == 2, "聊天接口已经存过的同一句（页面没等到回复、换了备用回复）：不重复记", mem._load(UID)["msgs"])
+
+    print("== 回复生成中回首页：/api/sync 等这一轮落盘，把它也整理了，红点随后就对（审核 2026-11-27 第五轮 P2）")
+    gate, inside = threading.Event(), threading.Event()
+    folds = []
+
+    def model(m):
+        if "整理记忆" in m[0]["content"]:
+            folds.append(1)
+            return fold_answer()
+        inside.set(); gate.wait(10)
+        return "嗯。"
+    mem = fresh()
+    app = app_with(mem, model)
+    put_follows(mem, [F("b1", TODAY, "bange")])
+    th = threading.Thread(target=app.chat, args=("bange", {"u": UID, "nick": "测试", "history": [{"role": "user", "content": "今天天气不错"}]}, {}))
+    th.start(); inside.wait(5)
+    out = {}
+    sy = threading.Thread(target=lambda: out.update(r=app.fold(UID, 1, wait=10))); sy.start(); time.sleep(0.3)
+    check(sy.is_alive() and mem.summary(UID)["due"] is None, "回复还在生成：/api/sync 在等，红点暂时不亮")
+    gate.set(); th.join(); sy.join()
+    check(folds and isinstance(out.get("r"), dict) and "busy" not in out["r"] and mem._load(UID)["folded"] == 1
+          and mem.summary(UID)["due"] == {"id": "b1", "p": "bange"}, "这一轮落盘后 /api/sync 接着整理了它：红点亮回来", (folds, out))
+    t0 = time.time()
+    while app.rec_jobs and time.time() - t0 < 10:
+        time.sleep(0.05)
+
+    print("== 整理超过等待上限：/api/sync 回 busy，不回一个“没有红点”的结果（审核 2026-11-27 第五轮 P3）")
+    gate, inside = threading.Event(), threading.Event()
+    mem = fresh(lambda m: (inside.set(), gate.wait(10), fold_answer())[2])
+    app = app_with(mem, None)
+    mem.llm = lambda m, a, b: (inside.set(), gate.wait(10), fold_answer())[2]
+    srv.APP, wait0, srv.SYNC_WAIT = app, srv.SYNC_WAIT, 0.5
+    put_follows(mem, [F("b1", TODAY)])
+    seed(mem, [(NOW, "bange", "user", "随便聊聊 %d" % i) for i in range(8)])
+    bg = threading.Thread(target=mem.consolidate, args=(UID, 8)); bg.start(); inside.wait(5)
+    st, r = post("/api/sync", {"u": UID})
+    check(st == 200 and r.get("busy") is True, "后台整理还没完：/api/sync 回 busy（页面过一会儿再来）", r)
+    gate.set(); bg.join()
+    st, r = post("/api/sync", {"u": UID})
+    check(not r.get("busy") and get("/api/self?u=" + UID)[1]["due"] == {"id": "b1", "p": "bange"}, "再来一次：整理完了，红点取得到", r)
+    srv.SYNC_WAIT = wait0
 
     print("== 午夜前领了 A、次日领了 B，A 才失败：放回 A，次日的名额不还（审核 2026-11-27 P2）")
     mem = fresh()

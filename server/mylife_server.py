@@ -47,7 +47,7 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import paipan
-from memory import (NEW_USER_LINE, RECORD_DAYS, RECORD_KINDS, RECORD_NAMES, Memory, meal_line, parse_json, parse_kcal, valid_uid,
+from memory import (BUSY, NEW_USER_LINE, RECORD_DAYS, RECORD_KINDS, RECORD_NAMES, Memory, meal_line, parse_json, parse_kcal, valid_uid,
                     write_json_atomic)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -276,6 +276,7 @@ PORTRAIT_HEARD_PATH = os.path.join(os.path.dirname(PORTRAIT_PATH), "portrait-hea
 # 接着上次的事（docs/方案_接着上次的事与红点留言.md）: things he said are coming up get a red dot on that self's card
 # when they should have an outcome, and one line about it when he taps it. MYLIFE_FOLLOW=0 turns it all off.
 FOLLOW_ON = os.environ.get("MYLIFE_FOLLOW", "1") != "0"
+SYNC_WAIT = 20  # s /api/sync waits for his turn being answered and a running fold (the page gives it 40 and asks again on busy)
 # Pictures he sends (client 2026-11-24: "支持上传图片，这样可以上传系统排盘截图或者其他图片"). A model first writes down
 # what is in the picture (a 排盘 screenshot copied out palace by palace) and the page sends that text as his message, so
 # the history, the memory and the logs stay text. On a test 紫微 screenshot deepseek-v4.1-flash copied all twelve palaces
@@ -1931,7 +1932,15 @@ class App:
             return None
 
     def note_said(self, uid, pid, said, reply, tid, who):
-        """His words the page answered itself (/api/event local): into his records the same way as a chat turn."""
+        """His words the page answered itself (/api/event local): into what the selves know and his records, the same way
+        as a chat turn (review 2026-11-27: "我只想说说，面试过了" got 导师's fixed reply, never reached the fold, and the
+        面试 dot stayed). Not twice: /api/chat may have kept it already when the page gave up waiting for the reply."""
+        try:
+            if said not in self.mem.just_said(uid, minutes=3):
+                if self.mem.append(uid, pid, [("user", clip(said, 1000)), ("ai", reply)]) >= 8:
+                    self.fold_pool.submit(self.fold, uid, 8)
+        except OSError as e:  # his profile is there but can't be read: nothing is written over it
+            sys.stderr.write("append %s: %s\n" % (uid[:6], e))
         at, vers = datetime.datetime.now(), {k: self.mem.record_ver(uid, k) for k in RECORD_KINDS}
         kinds = record_kinds_said([said], reply, False, lambda: self.after_meal(uid, (), at, vers["diet"]))
         if kinds:
@@ -2280,9 +2289,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def self_op(self, path, uid, req):
         if path == "/api/sync":
-            # one line is enough ("后天去拿体检结果" and gone); a fold already running is waited for, so the page's
-            # refresh after this sees it done (the page gives /api/sync 40 s; a fold takes a few)
-            r = APP.fold(uid, 1, wait=20) or {"add": [], "episode": ""}
+            # one line is enough ("后天去拿体检结果" and gone); his turn being answered and a fold already running are
+            # waited for, so the page's refresh after this sees it all folded; busy: not done in time, the page asks again
+            r = APP.fold(uid, 1, wait=SYNC_WAIT)
+            if r is BUSY:
+                return self.send_json(200, {"memories": [], "episode": "", "busy": True})
+            r = r or {"add": [], "episode": ""}
             return self.send_json(200, {"memories": r["add"], "episode": r["episode"]})
         if path == "/api/card":  # today's 彩虹卡 is read aloud on the page, no reply; the selves just remember it
             card = next((c for c in load_cards()["cards"] if c["id"] == str(req.get("id", ""))), None)

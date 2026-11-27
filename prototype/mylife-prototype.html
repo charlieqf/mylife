@@ -1008,7 +1008,15 @@ function refreshSelf(force){  // 15 秒内重复调用共用一次请求；整�
 // 离开对话时让服务器把这次聊的整理进长期记忆（新内容不到两句时服务器什么也不做）
 function syncSelf(){
   if(!CHAT.ok)return Promise.resolve();
-  return postJSON('/api/sync',{u:S.uid},40000).catch(function(){}).then(function(){refreshSelf(true)});  // 没整理成也再取一次（红点、记忆条数）
+  return postJSON('/api/sync',{u:S.uid},40000).catch(function(){return null}).then(function(d){
+    refreshSelf(true);  // 没整理成也再取一次（红点、记忆条数）
+    if(d&&d.busy)syncLater();else syncLater.n=0;
+  });
+}
+// 服务器说还在忙（他这一轮还在回话，或上一次整理还没完）：过一会儿再整理一次，首页的红点才是最新的（审核 2026-11-27）
+function syncLater(){
+  clearTimeout(syncLater.t);syncLater.n=(syncLater.n||0)+1;
+  if(syncLater.n<=4)syncLater.t=setTimeout(syncSelf,3000);else syncLater.n=0;
 }
 // 旧版只把记忆存在本机：第一次连上服务器时带过去
 (function(old){if(CHAT.ok&&old.length)postJSON('/api/self/import',{u:S.uid,notes:old.map(function(m){return m.text})},15000).then(function(){store.set('memories',[]);refreshSelf(true)}).catch(function(){})})(store.get('memories',[]));

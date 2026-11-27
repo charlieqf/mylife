@@ -37,6 +37,7 @@ import secrets
 import shutil
 import sys
 import threading
+import time
 from contextlib import contextmanager
 
 UID_RE = re.compile(r"^[A-Za-z0-9_-]{16,48}$")
@@ -83,6 +84,7 @@ JSON 里再加两个字段：
 写 follow 的规则：只记他亲口说的、一个月内会发生、之后会有结果的具体事：面试、考试、看病复查拿结果、见某人谈某事、交稿截止、搬家、出发旅行之类。聊天记录每段前面标着那段是哪天说的，按那一天算“明天”“后天”“周五”是哪天，due 写这件事发生的第二天；说不出具体哪天的（“过阵子”“最近”）不记。text 里写那天是几月几号、周几，不写“今天”“明天”“后天”“下周”这类过几天就不对的说法。不记：心情和长期的烦恼（“工作好累”“一直担心钱”）；AI 建议他去做的事；已经办完、已经有结果的事；想死、伤害自己一类的话。最多 2 条；【等着问的事】里已有的不重复写；没有就给空数组。
 写 close 的规则：只写他这次亲口说了结果（面完了、拿到结果了、谈过了），或说了不去了、取消了、改期还没定的；没有就给空数组。"""
 WEEKDAYS = "一二三四五六日"
+BUSY = {"busy": True}  # consolidate(wait=…) ran out of time: his turn still being answered, or another fold still running
 
 
 def valid_uid(uid):
@@ -286,6 +288,7 @@ class Memory:
         self.rec_clears = {}  # (uid, kind) -> times he cleared that kind (record_ver)
         self.rec_gone = {}  # (uid, kind) -> [(id, d, stub)] of that kind he deleted one by one, in order (record_recent)
         self.glock = threading.Lock()
+        self.quiet = threading.Condition(self.glock)  # notified when a turn is done (talk), for consolidate(wait=…)
 
     # ---------------------------------------------------------------- storage
     def _dir(self, uid):
@@ -589,13 +592,20 @@ class Memory:
     # ---------------------------------------------------------------- folding in
     def consolidate(self, uid, min_user=2, wait=0):
         """Fold unconsolidated lines into the profile. Returns {"add": [...], "episode": str} or None. One fold at a time
-        per user: with wait (seconds) a second one waits for the running one, then folds what is still left (often
-        nothing: no model call); without, it gives up at once (the background folds). /api/sync waits, so the home page
-        it is followed by sees the fold done (review 2026-11-27: it returned at once while a background fold ran, and the
-        red dot that fold freed never showed)."""
+        per user. With wait (seconds; /api/sync): first a turn of his still being answered is waited for (his words go on
+        disk with the reply), then a fold already running, then what is left is folded (often nothing: no model call);
+        BUSY when the time runs out, so the page asks again (review 2026-11-27: home before the reply, or during a long
+        fold, and the red dot it freed never showed). Without wait (the background folds) it gives up at once: None."""
         with self.glock:
             lock = self.folding.setdefault(uid, threading.Lock())
-        if not (lock.acquire(timeout=wait) if wait else lock.acquire(blocking=False)):
+        if wait:
+            end = time.monotonic() + wait
+            with self.quiet:
+                if not self.quiet.wait_for(lambda: not self.talking.get(uid), timeout=wait):
+                    return BUSY
+            if not lock.acquire(timeout=max(0.01, end - time.monotonic())):
+                return BUSY
+        elif not lock.acquire(blocking=False):
             return None
         try:
             with self._lock(uid):
@@ -666,10 +676,11 @@ class Memory:
             yield
         finally:
             if uid:
-                with self.glock:
+                with self.quiet:
                     self.talking[uid] -= 1
                     if not self.talking[uid]:
                         del self.talking[uid]
+                    self.quiet.notify_all()
 
     def _talking(self, uid):
         with self.glock:
