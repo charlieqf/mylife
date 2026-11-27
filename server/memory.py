@@ -9,7 +9,12 @@ Per anonymous user id (random, made in the browser, kept in localStorage; no acc
       upto       how many log lines have been folded
       portrait   "你是怎样的人" (<=220 字, second person), rewritten as they learn more
       notes      facts worth remembering ("你……", <=30 字 each, newest first, max 80)
-      episodes   one line per talk, max 300
+      episodes   one line per talk, max 300; d = the day of that talk's last line
+      follows    things he said are coming up and will have an outcome (面试、拿体检结果……), picked up when folding:
+                 [{id, text, due (the day after it happens), p (the self he told), state: open | asked | closed}].
+                 An open one shows as a red dot on that self's card from due to due+2, at most one a day across both
+                 selves (follow_day); tapping it opens with one line about it (follow_take). closed = he told the
+                 outcome himself. See docs/方案_接着上次的事与红点留言.md.
   /var/cache/mylife/users/<uid>/diet.json     专项记录 · 饮食: every meal he had the selves work out (calories, nutrition)
       {"items": [{id, t, d, meal (null when he didn't say which), items: [{name, amount, kcal: [lo, hi] | null}], kcal,
                   protein_g, fat_g, carb_g, note, p, tid, pics, lost (pictures that couldn't be read), said}]}
@@ -32,9 +37,12 @@ import secrets
 import shutil
 import sys
 import threading
+from contextlib import contextmanager
 
 UID_RE = re.compile(r"^[A-Za-z0-9_-]{16,48}$")
 NOTE_CAP, EPISODE_CAP = 80, 300
+FOLLOW_CAP, FOLLOW_DAYS, FOLLOW_AHEAD = 10, 3, 30  # open follows kept; days one can be asked (due..due+2); due at most this far out
+SESSION_GAP = datetime.timedelta(hours=2)  # the page sends only this visit (sessionMsgs: a 2-hour silence starts a new one)
 LEVELS = (3, 8, 16, 28, 45)  # score thresholds for how "formed" the other selves look (0..5)
 NEW_USER_LINE = "（你们刚认识，你还不知道他的任何事：不要提“上次”“上周”“那件事”这类往事。）"
 # How much to say when he brings something heavy or asks to be talked through it; grows with how well the selves
@@ -67,6 +75,14 @@ CONSOLIDATE_PROMPT = """你在帮一个人的“另一个自己”整理记忆�
 标着“他发来的图”的行是图片里抄出来的内容（别人的盘、聊天截图）：可以记“你发过一张……的图”，图上的生日、八字、别人说的话不当成他的事记，除非他自己说了是他的。
 写 portrait 的规则：在原来的基础上改，不要推倒重写；写他的处境、在意的人和事、反复出现的心事和情绪、做事和说话的习惯、他常用的词和说法（用引号原样保留几个，只能是标着“他”的行里的原话）；只写聊天里他自己的话有根据的（AI 的猜测和替他说的话不算），不推测，不下诊断，不评判好坏。
 如果这次聊天里几乎没有新东西，episode 照写，add 给空数组，portrait 原样返回。"""
+# Added to CONSOLIDATE_PROMPT while follows are on (Memory(follow=True))
+FOLLOW_PROMPT = """
+JSON 里再加两个字段：
+  "follow": [{"text": "以“你”开头，什么事、哪天，不超过 30 个字，比如“你11月28日（周六）下午有个面试”", "due": "YYYY-MM-DD，这件事发生的第二天"}],
+  "close": ["【等着问的事】里，这次他已经说了结果、或说了不去了/取消了的条目 id"]
+写 follow 的规则：只记他亲口说的、一个月内会发生、之后会有结果的具体事：面试、考试、看病复查拿结果、见某人谈某事、交稿截止、搬家、出发旅行之类。聊天记录每段前面标着那段是哪天说的，按那一天算“明天”“后天”“周五”是哪天，due 写这件事发生的第二天；说不出具体哪天的（“过阵子”“最近”）不记。text 里写那天是几月几号、周几，不写“今天”“明天”“后天”“下周”这类过几天就不对的说法。不记：心情和长期的烦恼（“工作好累”“一直担心钱”）；AI 建议他去做的事；已经办完、已经有结果的事；想死、伤害自己一类的话。最多 2 条；【等着问的事】里已有的不重复写；没有就给空数组。
+写 close 的规则：只写他这次亲口说了结果（面完了、拿到结果了、谈过了），或说了不去了、取消了、改期还没定的；没有就给空数组。"""
+WEEKDAYS = "一二三四五六日"
 
 
 def valid_uid(uid):
@@ -110,7 +126,28 @@ def _bigrams(s):
 
 
 def _empty_profile():
-    return {"since": _today(), "msgs": 0, "folded": 0, "upto": 0, "portrait": "", "notes": [], "episodes": []}
+    return {"since": _today(), "msgs": 0, "folded": 0, "upto": 0, "portrait": "", "notes": [], "episodes": [],
+            "follows": [], "follow_day": None}
+
+
+def _date(s):
+    """A date from 'YYYY-MM-DD…', or None."""
+    try:
+        return datetime.date.fromisoformat(str(s)[:10])
+    except ValueError:
+        return None
+
+
+def _follow_pick(prof, today):
+    """The one thing to ask him about today, or None: open, today within due..due+2, nothing asked yet today (either
+    self); the earliest due first. The red dot (summary) and follow_take both use this, so the dot is what is taken.
+    Nothing while some of his lines aren't folded yet: one of them may be the outcome (review 2026-11-27: "面完了" was
+    on disk, the fold that would close it still running, and the dot could be taken; the page folds first, /api/sync)."""
+    if prof.get("follow_day") == today.isoformat() or prof.get("msgs", 0) > prof.get("folded", 0):
+        return None
+    due = [(x["due"], i) for i, x in enumerate(prof["follows"]) if x.get("state") == "open" and _date(x.get("due"))
+           and 0 <= (today - _date(x["due"])).days < FOLLOW_DAYS]
+    return prof["follows"][min(due)[1]] if due else None
 
 
 RECORD_KINDS = ("diet", "sleep", "mood")
@@ -235,13 +272,16 @@ def parse_json(text):
 
 
 class Memory:
-    def __init__(self, root, llm):
-        """llm(messages, max_tokens, temperature) -> str (raises on failure)."""
+    def __init__(self, root, llm, follow=False, unsafe=None):
+        """llm(messages, max_tokens, temperature) -> str (raises on failure). follow: pick up follows when folding and
+        offer them (off: neither). unsafe(text) -> truthy for what is never followed up (the server's crisis words)."""
         self.root = root
         self.llm = llm
+        self.follow, self.unsafe = follow, unsafe
         os.makedirs(root, exist_ok=True)
         self.locks = {}
-        self.busy = set()
+        self.folding = {}  # uid -> Lock: one fold at a time per user (consolidate)
+        self.talking = {}  # uid -> turns of his being answered right now (talk): his words aren't on disk yet
         self.wipes = {}  # uid -> times wiped in this process: a fold that was running across a wipe is dropped
         self.rec_clears = {}  # (uid, kind) -> times he cleared that kind (record_ver)
         self.rec_gone = {}  # (uid, kind) -> [(id, d, stub)] of that kind he deleted one by one, in order (record_recent)
@@ -547,12 +587,16 @@ class Memory:
         return "\n".join(out)
 
     # ---------------------------------------------------------------- folding in
-    def consolidate(self, uid, min_user=2):
-        """Fold unconsolidated lines into the profile. Returns {"add": [...], "episode": str} or None."""
+    def consolidate(self, uid, min_user=2, wait=0):
+        """Fold unconsolidated lines into the profile. Returns {"add": [...], "episode": str} or None. One fold at a time
+        per user: with wait (seconds) a second one waits for the running one, then folds what is still left (often
+        nothing: no model call); without, it gives up at once (the background folds). /api/sync waits, so the home page
+        it is followed by sees the fold done (review 2026-11-27: it returned at once while a background fold ran, and the
+        red dot that fold freed never showed)."""
         with self.glock:
-            if uid in self.busy:
-                return None
-            self.busy.add(uid)
+            lock = self.folding.setdefault(uid, threading.Lock())
+        if not (lock.acquire(timeout=wait) if wait else lock.acquire(blocking=False)):
+            return None
         try:
             with self._lock(uid):
                 gen = self.wipes.get(uid, 0)
@@ -561,17 +605,28 @@ class Memory:
                     return None
                 new, nlines = self._read_log(uid, prof["upto"])
             n_user = sum(1 for r in new if r.get("role") == "user")
-            convo = []
-            for r in new[-60:]:
+            today = datetime.date.today()
+            convo, day = [], None
+            for r in new[-60:]:  # each day's lines under that day: "明天" said yesterday is today
+                d = _date(r.get("t"))
+                if d and d != day:
+                    convo.append("【%s 周%s 说的】" % (d.isoformat(), WEEKDAYS[d.weekday()]))
+                    day = d
                 convo.append(self._line(r, 300))
-            known = ["【他是怎样的人】", prof["portrait"] or "（还不了解）", "【已经记住的事】"]
+            said = _date(new[-60:][0].get("t")) if new else None
+            known = ["【今天】%s 周%s" % (today.isoformat(), WEEKDAYS[today.weekday()]),
+                     "【他是怎样的人】", prof["portrait"] or "（还不了解）", "【已经记住的事】"]
             known += ["%s｜%s" % (x["id"], x["text"]) for x in prof["notes"][:60]] or ["（还没有）"]
-            msgs = [{"role": "system", "content": CONSOLIDATE_PROMPT},
+            if self.follow:
+                known += ["【等着问的事】"] + (["%s｜%s｜%s" % (x["id"], x["text"], x["due"]) for x in prof["follows"]
+                                              if x.get("state") == "open"] or ["（没有）"])
+            msgs = [{"role": "system", "content": CONSOLIDATE_PROMPT + (FOLLOW_PROMPT if self.follow else "")},
                     {"role": "user", "content": "\n".join(known) + "\n\n【这次的聊天】\n" + "\n".join(convo)}]
-            data = parse_json(self.llm(msgs, 700, 0.3))
+            data = parse_json(self.llm(msgs, 900 if self.follow else 700, 0.3))
             if data is None:
                 return None
             pid = new[-1].get("p") if new else None
+            last = _date(new[-1].get("t")) if new else None
             with self._lock(uid):
                 if self.wipes.get(uid, 0) != gen:  # he cleared what the selves know while this fold was running
                     return None
@@ -585,18 +640,96 @@ class Memory:
                         added.append({"id": secrets.token_hex(4), "text": t, "d": _today(), "p": pid})
                 prof["notes"] = (added + [x for x in prof["notes"] if x["id"] not in drop])[:NOTE_CAP]
                 ep = str(data.get("episode") or "").strip()[:80]
-                if ep:
-                    prof["episodes"] = (prof["episodes"] + [{"d": _today(), "p": pid, "text": ep}])[-EPISODE_CAP:]
+                if ep:  # dated by the talk, not the fold: yesterday's talk folded today is still "昨天" to him
+                    prof["episodes"] = (prof["episodes"] + [{"d": (last or today).isoformat(), "p": pid, "text": ep}]
+                                        )[-EPISODE_CAP:]
                 pt = str(data.get("portrait") or "").strip()
                 if 20 <= len(pt) <= 400:
                     prof["portrait"] = pt
+                if self.follow:
+                    self._fold_follows(prof, data, said or today, today, pid)
                 prof["upto"] += nlines
                 prof["folded"] += n_user
                 self._save(uid, prof)
             return {"add": [x["text"] for x in added], "episode": ep}
         finally:
+            lock.release()
+
+    @contextmanager
+    def talk(self, uid):
+        """Around a chat turn (App.chat): his words go on disk only with the reply, and they may be the outcome of
+        something waiting to be asked (review 2026-11-27: "面试过了" sent, home before the reply, the dot still taken)."""
+        if uid:
             with self.glock:
-                self.busy.discard(uid)
+                self.talking[uid] = self.talking.get(uid, 0) + 1
+        try:
+            yield
+        finally:
+            if uid:
+                with self.glock:
+                    self.talking[uid] -= 1
+                    if not self.talking[uid]:
+                        del self.talking[uid]
+
+    def _talking(self, uid):
+        with self.glock:
+            return bool(self.talking.get(uid))
+
+    def _fold_follows(self, prof, data, said, today, pid):
+        """A fold's "close" and "follow" into prof["follows"] (under the lock). said = the day of the fold's first line:
+        a due must come after it and within FOLLOW_AHEAD days. What the model gets wrong is dropped, not guessed at."""
+        close = data.get("close") if isinstance(data.get("close"), list) else []
+        for x in prof["follows"]:
+            if x.get("state") == "open" and x["id"] in {str(c) for c in close}:
+                x["state"] = "closed"
+        have = {x["text"] for x in prof["follows"]}
+        got = data.get("follow") if isinstance(data.get("follow"), list) else []
+        for f in [f for f in got if isinstance(f, dict)][:2]:
+            text = re.sub(r"^(用户|他|她)", "你", str(f.get("text") or "").strip()).replace("用户", "你")[:40]
+            due = _date(f.get("due"))
+            if not text or text in have or (self.unsafe and self.unsafe(text)) or not due \
+                    or not said < due <= said + datetime.timedelta(days=FOLLOW_AHEAD):
+                sys.stderr.write("follow dropped: %r\n" % (f,))
+                continue
+            prof["follows"].append({"id": secrets.token_hex(4), "text": text, "due": due.isoformat(), "p": pid,
+                                    "state": "open"})
+            have.add(text)
+        # past their days nothing can ask about them; then at most FOLLOW_CAP open ones, the latest kept
+        keep = [x for x in prof["follows"] if _date(x.get("due")) and (today - _date(x["due"])).days < FOLLOW_DAYS]
+        opens = sorted((x for x in keep if x.get("state") == "open"), key=lambda x: x["due"])
+        gone = {x["id"] for x in opens[:max(0, len(opens) - FOLLOW_CAP)]}
+        prof["follows"] = [x for x in keep if x["id"] not in gone]
+
+    def follow_take(self, uid, pid, fid, today=None):
+        """He tapped the red dot on self `pid`'s card for follow `fid`: if that is still the one to ask today and it is
+        this self's, mark it asked (and today used) and return it with "day" (the day it used) and "prev" (follow_day
+        before, for follow_undo); otherwise None. Under the lock: the other card, an old id or a second tab gets nothing."""
+        if not self.follow:
+            return None
+        today = today or datetime.date.today()
+        if self._talking(uid):
+            return None
+        with self._lock(uid):
+            prof = self._load(uid)
+            f = _follow_pick(prof, today)
+            if not f or f["id"] != fid or f.get("p") != pid:
+                return None
+            prev, f["state"], prof["follow_day"] = prof.get("follow_day"), "asked", today.isoformat()
+            self._save(uid, prof)
+            return dict(f, prev=prev, day=today.isoformat())
+
+    def follow_undo(self, uid, f):
+        """The opening for follow `f` (from follow_take) couldn't be made: open again; its day is given back only if it
+        is still the day used (review 2026-11-27: taken before midnight, failed after another was taken the next day,
+        and the next day's one-a-day was given back)."""
+        with self._lock(uid):
+            prof = self._load(uid)
+            x = next((x for x in prof["follows"] if x["id"] == f["id"] and x.get("state") == "asked"), None)
+            if x:  # gone (wiped since): nothing to put back
+                x["state"] = "open"
+                if prof.get("follow_day") == f.get("day"):  # one a day: that day's one was this
+                    prof["follow_day"] = f.get("prev")
+                self._save(uid, prof)
 
     # ---------------------------------------------------------------- reading
     @staticmethod
@@ -605,14 +738,16 @@ class Memory:
         score = len(prof["notes"]) + 0.5 * len(prof["episodes"]) + 0.3 * min(days, 60)
         return sum(1 for t in LEVELS if score >= t), days
 
-    def summary(self, uid, strict=False):
+    def summary(self, uid, strict=False, today=None):
         """strict: Unreadable instead of an empty profile (the page keeps what it showed)."""
         with self._lock(uid):
             prof = self._load(uid, strict)
         lv, days = self.level(prof)
+        f = _follow_pick(prof, today or datetime.date.today()) if self.follow and not self._talking(uid) else None
         return {"days": days, "msgs": prof["msgs"], "level": lv, "portrait": prof["portrait"],
                 "notes": [{"id": x["id"], "text": x["text"], "d": x["d"]} for x in prof["notes"]],
-                "episodes": prof["episodes"][-10:]}
+                "episodes": prof["episodes"][-10:],
+                "due": f and {"id": f["id"], "p": f.get("p")}}  # the red dot: which card, never what it is about
 
     def reply_cap(self, uid, pid=None):
         """Most 字 a chat reply from self `pid` may have for this user (see DEPTH)."""
@@ -641,11 +776,14 @@ class Memory:
         share it; `pid` is the one he is talking to, and what he said to the other one since the last fold is added
         verbatim, so switching selves never meets a stranger (pid=None adds every unfolded line). brief: only how long
         they have known each other, for talk that shouldn't be pulled back to his old topics (star signs and the like)."""
+        # this self's own unfolded lines are in the history the page sends only for this visit; older ones (yesterday's,
+        # never folded: one line and gone) would be lost to it while the other self sees them (review 2026-11-27)
+        visit = (datetime.datetime.now() - SESSION_GAP).isoformat(timespec="seconds")
         with self._lock(uid):
             prof = self._load(uid, strict=False)
             # only his lines (and cards): the other self's replies were being paraphrased, so both sounded the same
-            fresh = [r for r in self._read_log(uid, prof["upto"])[0]
-                     if r.get("p") != pid and r.get("role") in ("user", "card")][-8:]
+            fresh = [r for r in self._read_log(uid, prof["upto"])[0] if r.get("role") in ("user", "card")
+                     and (r.get("p") != pid or str(r.get("t", "")) < visit)][-8:]
         lv, days = self.level(prof)
         out = ["【你对他的了解】（都是他告诉你的，他说过的才算数；跟他现在说的对不上，就以现在说的为准，不在回复里琢磨、不点破）"
                "这些是让你懂他的，不是每次都要提：他说起新的事、换了话题，就聊他现在说的，不把以前的事扯进来；"

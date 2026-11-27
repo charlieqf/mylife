@@ -9,10 +9,11 @@ Endpoints
   POST /api/chat     {p, u, nick, profile, notme, birth, history} -> {reply, model, ms, tid}
   POST /api/chart    {date, time, slot, city}                 -> 排盘（八字、紫微、星盘，server/paipan.py）：{items, animal, text, ...}
   POST /api/card     {p, u, id}                               -> {ok}   今天抽到的彩虹卡记进长期记忆（卡由页面念，不接话）
-  POST /api/open     {p, u, nick}                             -> {text, model, ms, tid}   进对话时先开口（两个人格记忆共享）
+  POST /api/open     {p, u, nick, follow}                     -> {text, model, ms, tid, follow}   进对话时先开口（两个人格记忆共享）；
+                     follow = 首页红点那件事的 id（他点了带红点的卡）：开口就说那件事，回来的 follow 是用上的那件
   POST /api/closing  {p, u, nick, history}                    -> {text, model, ms, tid}   收尾一句
   POST /api/portrait {u, sign, mbti, blood, animal}          -> {sign:[{h,t}], mbti:[{h,t}], mix, heard}  性格画像的展开
-  POST /api/sync     {u}  fold the latest talk into long-term memory (server/memory.py)
+  POST /api/sync     {u}  fold the latest talk into long-term memory (server/memory.py); GET /api/self 的 due = 首页红点 {id, p}
   POST /api/self/forget {u, id} | /api/self/wipe {u} | /api/self/import {u, notes}
   POST /api/records/delete {u, kind, id} | /api/records/clear {u, kind}   我的记录：饮食、睡眠、心情（memory.py）
   POST /api/fb       {p, u, tid, mid, v, reply, user}         👍/👎 on one reply
@@ -272,6 +273,9 @@ CLOSING_PATH = os.environ.get("MYLIFE_CLOSING_STYLE", os.path.join(PROMPT_DIR, "
 CARDS_PATH = os.environ.get("MYLIFE_CARDS", os.path.join(PROMPT_DIR, "rainbow-cards.json"))
 PORTRAIT_PATH = os.environ.get("MYLIFE_PORTRAIT", os.path.join(PROMPT_DIR, "portrait.txt"))
 PORTRAIT_HEARD_PATH = os.path.join(os.path.dirname(PORTRAIT_PATH), "portrait-heard.txt")
+# 接着上次的事（docs/方案_接着上次的事与红点留言.md）: things he said are coming up get a red dot on that self's card
+# when they should have an outcome, and one line about it when he taps it. MYLIFE_FOLLOW=0 turns it all off.
+FOLLOW_ON = os.environ.get("MYLIFE_FOLLOW", "1") != "0"
 # Pictures he sends (client 2026-11-24: "支持上传图片，这样可以上传系统排盘截图或者其他图片"). A model first writes down
 # what is in the picture (a 排盘 screenshot copied out palace by palace) and the page sends that text as his message, so
 # the history, the memory and the logs stay text. On a test 紫微 screenshot deepseek-v4.1-flash copied all twelve palaces
@@ -1630,16 +1634,27 @@ OPENING_END = {"bange": {"cont": ["也让他知道想换个别的说也行"],
                "pingzuo": {"cont": ["再让他知道接着说这个、想说点别的都行"],
                            "fresh": ["让他知道想聊什么都行，大事小事、新的事都可以", "让他知道不用急着开口",
                                      "让他知道不想说也可以就待一会儿", "让他知道你在这儿"]}}
+OPENING_FOLLOW = ("【现在】他又来了，打开了和你（%s）的对话，还没开口。首页上给他留了一句话，他是点着这句进来的。他前几天说过：%s"
+                  "（这件事现在应该有结果了）。你先开口：一两句，不超过四十个字，就这件事说一句，%s。"
+                  "不说“上回”“上次你说”“我一直记着”“我记得你说过”，不复述细节，不猜结果好坏（不说“过去了就过去了”“别多想”这类像是已经知道结果不好的话），不说恭喜也不说没关系；"
+                  "他不想聊这个，换别的也行，别让他觉得非答不可。")
+FOLLOW_MAX = 40  # 字 (fit: whitespace not counted), as OPENING_FOLLOW asks
+OPENING_FOLLOW_END = {"bange": "可以问一句怎么样了，只问这一个问题",
+                      "pingzuo": "提一句那件事，让他知道想说说就说，不想说也没关系"}
 OPENING_NOTE = {"pingzuo": "，用你自己的话，不说“说一半也行”，别总拿“嗯，我在”“想说什么都行”起头，不提问，不用问号"}
 
 
-def build_opening(pid, req, know=None, just=None):
-    """开场一句: persona + who the user is + task. just = his lines from the last hour (pick that up); otherwise a fresh
-    hello, and `know` only says how long they have known each other (the old topics stay out of it)."""
-    kind = "cont" if just else "fresh"
-    end = random.choice(OPENING_END[pid][kind]) + OPENING_NOTE.get(pid, "")
-    task = (OPENING_CONT % (PERSONAS[pid][0], "\n".join("他：" + clip(t, 150) for t in just), end) if just
-            else OPENING_FRESH % (PERSONAS[pid][0], end))
+def build_opening(pid, req, know=None, just=None, follow=None):
+    """开场一句: persona + who the user is + task. follow = the thing he tapped the red dot for (one line about it);
+    just = his lines from the last hour (pick that up); otherwise a fresh hello, and `know` only says how long they
+    have known each other (the old topics stay out of it)."""
+    if follow:
+        task = OPENING_FOLLOW % (PERSONAS[pid][0], follow["text"], OPENING_FOLLOW_END[pid] + OPENING_NOTE.get(pid, ""))
+    else:
+        kind = "cont" if just else "fresh"
+        end = random.choice(OPENING_END[pid][kind]) + OPENING_NOTE.get(pid, "")
+        task = (OPENING_CONT % (PERSONAS[pid][0], "\n".join("他：" + clip(t, 150) for t in just), end) if just
+                else OPENING_FRESH % (PERSONAS[pid][0], end))
     system = system_prompt(pid, user_block(req), know or NEW_USER_LINE, task)
     return [{"role": "system", "content": system}, {"role": "user", "content": "（他打开了和你的对话）"}]
 
@@ -1661,7 +1676,8 @@ class App:
         self.fold_pool = ThreadPoolExecutor(max_workers=2)  # memory folds and records, in the background
         self.rec_jobs, self.rec_lock = {}, threading.Lock()  # uid -> his record jobs not done yet, oldest first (queue_records)
         self.mem = Memory(os.path.join(DATA_DIR, "users"),
-                          lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0])
+                          lambda msgs, max_tokens, temperature: self.llm(msgs, max_tokens, temperature, timeout=40)[0],
+                          follow=FOLLOW_ON, unsafe=CRISIS.search)
         self.lock = threading.Lock()       # rate limits
         self.recent_moves = {}             # (uid, pid) -> the last two 路子 used, so the next reply takes another
         self.geo = Geo(os.path.join(DATA_DIR, "geo.json"))
@@ -1711,6 +1727,11 @@ class App:
         return text, model, int((time.time() - t0) * 1000)
 
     def chat(self, pid, req, who):
+        """/api/chat. While the reply is being written his words aren't on disk yet: no red dot meanwhile (Memory.talk)."""
+        with self.mem.talk(req.get("u") if valid_uid(req.get("u")) else None):
+            return self._chat(pid, req, who)
+
+    def _chat(self, pid, req, who):
         uid = req.get("u") if valid_uid(req.get("u")) else None
         at = datetime.datetime.now()  # when he said it: records pulled out of this turn are dated and checked against it
         vers = {k: self.mem.record_ver(uid, k) for k in RECORD_KINDS} if uid else {}
@@ -1848,14 +1869,25 @@ class App:
         """First line when he opens a chat after a while or after talking to the other self: what he said in the last
         hour (to either self) is picked up, anything older waits until he brings it up (see OPENING_FRESH)."""
         uid = req.get("u") if valid_uid(req.get("u")) else None
-        just = self.mem.just_said(uid) if uid else []
+        f = None
+        if uid and isinstance(req.get("follow"), str):  # he tapped a red dot: that thing, if it is still this card's
+            try:
+                f = self.mem.follow_take(uid, pid, req["follow"])
+            except OSError as e:
+                sys.stderr.write("follow_take %s: %s\n" % (uid[:6], e))
+        just = [] if f else self.mem.just_said(uid) if uid else []
         s = self.mem.summary(uid) if uid else None
         know = "【你对他的了解】认识第 %d 天，他跟你说过 %d 句话。" % (s["days"], s["msgs"]) if s and s["msgs"] else None
-        text, model, ms = self.llm(build_opening(pid, req, know, just), max_tokens=120)
-        text = postprocess("", drop_other_self(pid, fit(text, 80), " ".join(just)))
+        try:
+            text, model, ms = self.llm(build_opening(pid, req, know, just, f), max_tokens=120)
+        except Exception:
+            if f:  # nothing was said about it: the dot stays, today isn't used
+                self.mem.follow_undo(uid, f)
+            raise
+        text = postprocess("", drop_other_self(pid, fit(text, FOLLOW_MAX if f else 80), " ".join(just)))
         tid = self.log("open", who, pid, req, reply=text, model=model, ms=ms, pv=prompt_version(pid), know=know,
-                       just=just or None)
-        return {"text": text, "model": model, "ms": ms, "tid": tid}
+                       just=just or None, follow=f and f["id"], follow_text=f and f["text"])
+        return {"text": text, "model": model, "ms": ms, "tid": tid, "follow": f and f["id"]}
 
     def portrait(self, req, who):
         """The portrait page's longer read of his sign and MBTI, and (once he has talked) of what he has said."""
@@ -1891,9 +1923,9 @@ class App:
         self.log("portrait", who, "", req, sign=sign, mbti=mbti, reply=json.dumps(out, ensure_ascii=False), model=model, ms=ms)
         return out
 
-    def fold(self, uid, min_user):
+    def fold(self, uid, min_user, wait=0):
         try:
-            return self.mem.consolidate(uid, min_user)
+            return self.mem.consolidate(uid, min_user, wait)
         except Exception as e:  # background work must never take the server down
             sys.stderr.write("consolidate %s failed: %s\n" % (uid[:6], e))
             return None
@@ -2248,7 +2280,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def self_op(self, path, uid, req):
         if path == "/api/sync":
-            r = APP.fold(uid, 2) or {"add": [], "episode": ""}
+            # one line is enough ("后天去拿体检结果" and gone); a fold already running is waited for, so the page's
+            # refresh after this sees it done (the page gives /api/sync 40 s; a fold takes a few)
+            r = APP.fold(uid, 1, wait=20) or {"add": [], "episode": ""}
             return self.send_json(200, {"memories": r["add"], "episode": r["episode"]})
         if path == "/api/card":  # today's 彩虹卡 is read aloud on the page, no reply; the selves just remember it
             card = next((c for c in load_cards()["cards"] if c["id"] == str(req.get("id", ""))), None)

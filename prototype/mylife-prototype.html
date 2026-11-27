@@ -562,11 +562,23 @@ function goHome(){
   $('#home-title').textContent=(S.user?S.user.nick+'，':'')+'今天想跟哪个自己聊？';paintSelf();refreshSelf();
   var box=$('#home-cards');box.innerHTML='';
   ['bange','pingzuo'].forEach(function(id){
-    var p=P[id],c=document.createElement('button');c.className='pcard '+p.cls;
+    var p=P[id],c=document.createElement('button');c.className='pcard '+p.cls;c.dataset.p=id;
     var lt=lastText(id);
     c.innerHTML=''+'<div class="thumb">'+sceneSVG(id,{vb:THUMB_VB[id],par:'xMidYMid slice'})+'</div><div class="top"><div class="kind">'+p.kind+'</div><div class="nm">'+p.name+'</div></div><div class="pitch">'+esc(p.pitch)+'</div>'+(lt?'<div class="last">上次：'+esc(lt)+'</div>':'');
-    c.addEventListener('click',function(){openChat(id,true)});
+    c.addEventListener('click',function(){openChat(id,true,true)});
     box.appendChild(c);
+  });
+  paintDue();
+}
+// 首页红点：哪个自己给他留了一句话（服务器 /api/self 的 due，只说是哪张卡，不说是什么事）。点这张卡进去，开口就说那件事
+function paintDue(){
+  $$('#home-cards .pcard').forEach(function(c){
+    var id=c.dataset.p,on=!!(S.due&&S.due.p===id),dot=c.querySelector('.dot'),last=c.querySelector('.last'),lt=lastText(id);
+    if(on&&!dot){dot=document.createElement('i');dot.className='dot';c.appendChild(dot)}else if(!on&&dot)dot.remove();
+    var t=on?'有一句话留给你':lt?'上次：'+lt:'';
+    if(t&&!last){last=document.createElement('div');last.className='last';c.appendChild(last)}
+    if(last){if(t)last.textContent=t;else last.remove()}
+    if(last)last.classList.toggle('due',on);
   });
 }
 $$('[data-nav]').forEach(function(b){b.addEventListener('click',function(){nav(b.dataset.nav)})});
@@ -980,18 +992,23 @@ function paintSelf(){
   if($('#s-chat').classList.contains('on'))$('#chat-sub').textContent=n?'另一个你 · 认识第 '+s.days+' 天 · 记得 '+n+' 件事':P[S.cur].sub;
 }
 var selfP=null,selfT=0;
+// 红点只认最新的一次 /api/self：DUE_REQ 是发出的第几次，DUE_SEEN 是红点用到的第几次；清掉红点时 DUE_SEEN 跳到已发出的最后一次
+// （审核 2026-11-27：清掉之前发出的旧请求晚到，或两次刷新乱序、新的先回 null，旧的后回带着已关掉的那件，红点都会画回来）
+S.due=null;var DUE_REQ=0,DUE_SEEN=0;
 function refreshSelf(force){  // 15 秒内重复调用共用一次请求；整理或删改之后 force
   if(!CHAT.ok)return Promise.resolve(null);
   if(selfP&&!force&&Date.now()-selfT<15000)return selfP;
-  selfT=Date.now();var w=WIPED;
+  selfT=Date.now();var w=WIPED,n=++DUE_REQ;
   return selfP=fetch('/api/self?u='+encodeURIComponent(S.uid)).then(function(r){return r.ok?r.json():null}).then(function(d){
     if(w!==WIPED)return null;  // 清空前发出的：带回来的是清空前的记忆，不要了（审核 2026-11-26：记忆条数、可导出的旧记忆又回来了）
-    if(d){S.self={days:d.days,level:d.level,n:d.notes.length};store.set('self',S.self);S.selfFull=d;paintSelf()}return d}).catch(function(){selfP=null;return null});
+    if(d){S.self={days:d.days,level:d.level,n:d.notes.length};store.set('self',S.self);S.selfFull=d;paintSelf();
+      if(n>DUE_SEEN){DUE_SEEN=n;S.due=d.due||null;paintDue()}}
+    return d}).catch(function(){selfP=null;return null});
 }
 // 离开对话时让服务器把这次聊的整理进长期记忆（新内容不到两句时服务器什么也不做）
 function syncSelf(){
   if(!CHAT.ok)return Promise.resolve();
-  return postJSON('/api/sync',{u:S.uid},40000).then(function(){refreshSelf(true)}).catch(function(){});
+  return postJSON('/api/sync',{u:S.uid},40000).catch(function(){}).then(function(){refreshSelf(true)});  // 没整理成也再取一次（红点、记忆条数）
 }
 // 旧版只把记忆存在本机：第一次连上服务器时带过去
 (function(old){if(CHAT.ok&&old.length)postJSON('/api/self/import',{u:S.uid,notes:old.map(function(m){return m.text})},15000).then(function(){store.set('memories',[]);refreshSelf(true)}).catch(function(){})})(store.get('memories',[]));
@@ -1098,20 +1115,22 @@ function setSend(){$('#btn-send').disabled=S.busy||!inMsg.value.trim();$('#btn-p
   inMsg.placeholder=m&&m.role==='user'&&(m.img||m.broken)&&!m.cap?'说说想让我帮你看什么…':S.cur==='pingzuo'?'想说什么都行…':'说说你在想的事…'}
 function lastAt(id,role){return S.logs[id].reduce(function(a,m){return !role||m.role===role?Math.max(a,m.t||0):a},0)}
 // 进对话时先开口：服务器按两个人格共享的记忆接上刚才或上次的话（取不到就返回 false，退回固定招呼）
-async function openLine(id){
+// fid：他点的是带红点的卡，那件事的 id（服务器核对还是这张卡今天该问的才用，回来的 d.follow 是用上的那件）
+async function openLine(id,fid){
   if(!CHAT.ok)return false;
   var ty=typing(),d=null,w=WIPED;
-  try{d=await postJSON('/api/open',{u:S.uid,p:id,nick:chatContext().nick},20000)}catch(e){}
+  try{d=await postJSON('/api/open',{u:S.uid,p:id,nick:chatContext().nick,follow:fid||undefined},20000)}catch(e){}
   ty.remove();
+  if(d&&fid&&d.follow===fid&&w===WIPED){S.due=null;DUE_SEEN=DUE_REQ;paintDue()}  // 用上了：服务器那边已算问过，红点清掉
   if(!d||!d.text||S.cur!==id||w!==WIPED)return false;
   await say(d.text,{wait:1,tid:d.tid});return true;
 }
-async function openChat(id,push_){
+async function openChat(id,push_,card){  // card：从首页点卡片进来的（只有这样才带红点的那件事）
   if(S.busy&&id!==S.cur){  // 上一个自己还在等模型回话：点了不能没反应，说一声，等它说完就打开
     openChat.want=id;
     if(!openChat.wait){toast('等'+P[S.cur].name+'把这句说完…');var t0=Date.now();
       openChat.wait=setInterval(function(){if(S.busy&&Date.now()-t0<60000)return;clearInterval(openChat.wait);openChat.wait=0;
-        if(!S.busy&&$('#s-home').classList.contains('on'))openChat(openChat.want,push_)},250)}
+        if(!S.busy&&$('#s-home').classList.contains('on'))openChat(openChat.want,push_,card)},250)}
     return;
   }
   if(id!==S.cur){stopSpeak();syncSelf()}
@@ -1123,10 +1142,11 @@ async function openChat(id,push_){
   $('#chat-sub').textContent=p.sub;paintSelf();refreshSelf();
   renderSuggest();renderAll();setSend();  // 先放好快捷话题再滚到底，不然话题条一出来，最后一行被顶到下面
   var lastT=lastAt(id),heard=lastAt(other(id),'user')>lastT;  // 他后来又跟另一个自己说过话：记忆是共享的，这边先开口接上
-  if(S.entered[id]&&!heard){askVoice();return}S.entered[id]=true;
+  var fid=card&&S.due&&S.due.p===id?S.due.id:null;  // 点的是带红点的卡：开口就说留给他的那件事（这次已进来过也说）
+  if(S.entered[id]&&!heard&&!fid){askVoice();return}S.entered[id]=true;
   var newVisit=Date.now()-lastT>2*3600e3,hasAI=S.logs[id].some(function(m){return m.role==='ai'});
   S.busy=true;setSend();var w=WIPED;
-  if(heard||(newVisit&&(hasAI||(S.self&&S.self.n))))hasAI=(await openLine(id))||hasAI;
+  if(fid||heard||(newVisit&&(hasAI||(S.self&&S.self.n))))hasAI=(await openLine(id,fid))||hasAI;
   if(w!==WIPED){S.busy=false;setSend();return}  // 等开场白的时候他清空了：也不补默认招呼（审核 2026-11-26），下次进来再打招呼
   if(!hasAI)await say(greeting(id),{wait:500});
   await cardsP;
@@ -1492,7 +1512,7 @@ $('#btn-clear').addEventListener('click',function(){
   wipeServer().then(function(left){  // 服务器上删干净了才清本机、才说删了；没删干净就照实说还剩什么，本机的不动，再点一次重试
     if(left){renderSet();refreshSelf(true);var say_='没能全部清空：'+leftSay(left)+'。本机的聊天记录还在，可以再试一次';
       $('#clear-hint').textContent=say_;toast(say_);return}
-    WIPED++;S.logs={bange:[],pingzuo:[]};S.sessions=[];S.entered={};S.userCount={bange:0,pingzuo:0};S.self=null;S.selfFull=null;
+    WIPED++;S.logs={bange:[],pingzuo:[]};S.sessions=[];S.entered={};S.userCount={bange:0,pingzuo:0};S.self=null;S.selfFull=null;S.due=null;DUE_SEEN=DUE_REQ;
     selfP=null;PTX={sig:'',p:null,data:null};store.set('ptx',null);  // 画像里“从你说过的话看”那段也是记忆写的：一起不要，下次重写
     store.set('memories',[]);  // 老版本存在本机、还没导进服务器的记忆：不清的话下次打开又导回去
     store.set('self',null);save();toast('已清空，服务器上的记忆和饮食、睡眠、心情记录也删了');renderSet();
